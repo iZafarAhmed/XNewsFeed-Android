@@ -416,6 +416,21 @@ document.addEventListener('DOMContentLoaded', () => {
     container.onclick = () => window.open(url, '_blank');
   }
 
+    // Global click listener to handle removing users
+  document.body.addEventListener('click', (e) => {
+    if (e.target.classList.contains('remove-btn')) {
+      const userToRemove = e.target.getAttribute('data-user');
+      store.get(['usernames'], (r) => {
+        let list = r.usernames || [];
+        list = list.filter(u => u !== userToRemove); // Filter out the clicked user
+        store.set({ usernames: list }, () => {
+          // Remove all cards for this user from the screen instantly
+          document.querySelectorAll(`.tweet-card[data-user="${userToRemove}"]`).forEach(el => el.remove());
+        });
+      });
+    }
+  });
+
   /* ---------- INIT ---------- */
   reloadFeeds();
 });
