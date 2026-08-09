@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>X News Feed</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header class="app-header">
+    <div class="app-title">⚡ X News Feed</div>
+    <div class="header-actions">
+      <button id="refresh-btn" class="hdr-btn" title="Refresh">⟳</button>
+      <button id="theme-btn" class="hdr-btn" title="Toggle dark mode">🌙</button>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" data-view="feed">🏠 Feed</div>
+    <div class="tab" data-view="trends">🔥 Trending</div>
+  </div>
+
+  <!-- FEED VIEW -->
+  <section id="view-feed">
+    <div class="controls-row">
+      <input type="text" id="username-input" placeholder="Enter username" title="Enter any X username">
+      <select id="popular-select" class="compact-select" title="Add popular News & AI channels">
+        <option value="">➕</option>
+        <optgroup label="📰 NEWS">
+          <option value="BBCBreaking">@BBCBreaking · BBC Breaking</option>
+          <option value="Reuters">@Reuters · Reuters</option>
+          <option value="AP">@AP · Associated Press</option>
+          <option value="CNN">@CNN · CNN</option>
+          <option value="AJEnglish">@AJEnglish · Al Jazeera</option>
+          <option value="MiddleEastEye">@MiddleEastEye · Middle East Eye</option>
+          <option value="nytimes">@nytimes · New York Times</option>
+          <option value="guardian">@guardian · The Guardian</option>
+          <option value="washingtonpost">@washingtonpost · Washington Post</option>
+          <option value="SkyNews">@SkyNews · Sky News</option>
+          <option value="NBCNews">@NBCNews · NBC News</option>
+          <option value="CBSNews">@CBSNews · CBS News</option>
+          <option value="FoxNews">@FoxNews · Fox News</option>
+          <option value="Bloomberg">@Bloomberg · Bloomberg</option>
+        </optgroup>
+        <optgroup label="🤖 AI (Official)">
+          <option value="OpenAI">@OpenAI · OpenAI</option>
+          <option value="AnthropicAI">@AnthropicAI · Anthropic</option>
+          <option value="xAI">@xAI · xAI (Grok)</option>
+          <option value="GoogleDeepMind">@GoogleDeepMind · Google DeepMind</option>
+          <option value="AIatMeta">@AIatMeta · Meta AI</option>
+          <option value="HuggingFace">@HuggingFace · Hugging Face</option>
+          <option value="NVIDIA">@NVIDIA · NVIDIA</option>
+          <option value="MistralAI">@MistralAI · Mistral AI</option>
+          <option value="DeepSeekAI">@DeepSeekAI · DeepSeek</option>
+          <option value="StabilityAI">@StabilityAI · Stability AI</option>
+        </optgroup>
+      </select>
+      <button id="load-btn" class="btn btn-primary">Add</button>
+      <button id="clear-btn" class="btn btn-icon" title="Clear all saved feeds">🗑</button>
+    </div>
+    <div id="feed-container"></div>
+  </section>
+
+  <!-- TRENDING VIEW -->
+  <section id="view-trends" hidden>
+    <div id="trend-container"></div>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>
