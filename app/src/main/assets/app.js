@@ -66,13 +66,12 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentView = 'feed';
   let trendsLoaded = false;
 
-  // Remove button logic
+  // Remove single user
   document.body.addEventListener('click', (e) => {
     if (e.target.classList.contains('remove-btn')) {
       const userToRemove = e.target.getAttribute('data-user');
       store.get(['usernames'], (r) => {
-        let list = r.usernames || [];
-        list = list.filter(u => u !== userToRemove);
+        let list = (r.usernames || []).filter(u => u !== userToRemove);
         store.set({ usernames: list }, () => {
           document.querySelectorAll(`.tweet-card[data-user="${userToRemove}"]`).forEach(el => el.remove());
         });
@@ -319,7 +318,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
-  /* ========== IMPROVED VIDEO FETCHING ========== */
+  /* ========== VIDEO (Nitter + FxTwitter/VxTwitter fallbacks) ========== */
   async function handleVideoPlayback(container) {
     const tid = container.getAttribute('data-tweet-id');
     const uname = container.getAttribute('data-username');
@@ -330,12 +329,41 @@ document.addEventListener('DOMContentLoaded', () => {
     if (overlay) { overlay.textContent = 'Loading video...'; overlay.style.fontSize = '12px'; }
 
     try {
-      const rawHtml = await smartFetch(fallbackUrl);
-      const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
-      
-      // Pass raw HTML for regex fallback
-      const candidates = await collectVideoCandidates(doc, rawHtml);
-      
+      let candidates = [];
+
+      // 1) Try Nitter page first
+      try {
+        const rawHtml = await smartFetch(fallbackUrl);
+        const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
+        candidates = await collectVideoCandidates(doc, rawHtml);
+      } catch (e) {}
+
+      // 2) Fallback: FxTwitter public API (returns direct MP4s)
+      if (!candidates.length) {
+        try {
+          const fx = JSON.parse(await smartFetch(`https://api.fxtwitter.com/${uname}/status/${tid}`));
+          collectMp4s(fx).forEach(u => pushUnique(candidates, u));
+        } catch (e) {}
+      }
+
+      // 3) Fallback: VxTwitter public API
+      if (!candidates.length) {
+        try {
+          const vx = JSON.parse(await smartFetch(`https://api.vxtwitter.com/${uname}/status/${tid}`));
+          if (vx.videoURL) pushUnique(candidates, vx.videoURL);
+          collectMp4s(vx).forEach(u => pushUnique(candidates, u));
+        } catch (e) {}
+      }
+
+      // Upgrade any m3u8 to mp4 if possible
+      for (const m3u8 of candidates.filter(c => c.includes('.m3u8'))) {
+        const mp4 = await extractMp4FromPlaylist(m3u8);
+        if (mp4) pushUnique(candidates, mp4);
+      }
+
+      // Prefer mp4 over m3u8
+      candidates.sort((a, b) => (a.includes('.mp4') ? -1 : 1) - (b.includes('.mp4') ? -1 : 1));
+
       if (candidates.length) injectVideoPlayer(container, candidates, poster, fallbackUrl);
       else showFallback(container, fallbackUrl, '🎬 Video not found. Click to open on Nitter.');
     } catch (err) {
@@ -344,60 +372,55 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function pushUnique(arr, u) {
+    if (u && u.startsWith('http') && !arr.includes(u)) arr.push(u);
+  }
+
+  // Recursively collect every *.mp4 URL hidden anywhere in a JSON object
+  function collectMp4s(obj, out = []) {
+    if (typeof obj === 'string') {
+      if (obj.startsWith('http') && obj.includes('.mp4')) out.push(obj);
+      return out;
+    }
+    if (Array.isArray(obj)) { obj.forEach(v => collectMp4s(v, out)); return out; }
+    if (obj && typeof obj === 'object') Object.values(obj).forEach(v => collectMp4s(v, out));
+    return out;
+  }
+
   async function collectVideoCandidates(doc, rawHtml) {
     const candidates = [];
-    const push = u => { if (u && !candidates.includes(u)) candidates.push(u); };
 
-    // 1. Look for MP4s in standard tags
-    doc.querySelectorAll('video source[src], video[src], a.video-download[href]').forEach(el => {
-      const raw = el.getAttribute('src') || el.getAttribute('href');
+    const pushRaw = raw => {
       if (!raw) return;
       const dec = decodeNitterProxyUrl(raw);
-      if (dec && dec.includes('.mp4')) push(dec);
-      if (raw.startsWith('http') && (raw.includes('.mp4') || raw.includes('video.twimg'))) push(raw);
-      if (raw.startsWith('/') && raw.includes('.mp4')) push(NITTER_INSTANCE + raw);
+      if (dec && (dec.includes('.mp4') || dec.includes('.m3u8'))) pushUnique(candidates, dec);
+      if (raw.startsWith('http') && (raw.includes('.mp4') || raw.includes('.m3u8') || raw.includes('video.twimg'))) pushUnique(candidates, raw);
+      if (raw.startsWith('/') && (raw.includes('.mp4') || raw.includes('.m3u8') || raw.includes('/video/') || raw.includes('/vid/'))) pushUnique(candidates, NITTER_INSTANCE + raw);
+    };
+
+    doc.querySelectorAll('video source[src], video[src], video[data-url], a.video-download[href], a[href*="ext_tw_video"]').forEach(el => {
+      pushRaw(el.getAttribute('src') || el.getAttribute('data-url') || el.getAttribute('href'));
     });
 
-    // 2. Look for HLS (m3u8) in data-url. Android WebView plays m3u8 natively!
-    doc.querySelectorAll('video[data-url]').forEach(el => {
-      const raw = el.getAttribute('data-url');
-      if (!raw) return;
-      const url = decodeNitterProxyUrl(raw) || (raw.startsWith('http') ? raw : NITTER_INSTANCE + raw);
-      if (url.includes('.m3u8') || url.includes('video.twimg')) push(url);
-    });
-
-    // 3. Regex fallback: Search raw HTML for any direct video.twimg.com URLs
-    const urlRegex = /https?:\/\/[^"'\s<>]+?video\.twimg\.com[^"'\s<>]+/g;
-    const matches = rawHtml.match(urlRegex);
-    if (matches) {
-      matches.forEach(m => {
-        const cleanUrl = m.replace(/[.,;:]+$/, '');
-        if (cleanUrl.includes('.mp4') || cleanUrl.includes('.m3u8')) push(cleanUrl);
-      });
-    }
-
-    // 4. If we found an m3u8, try to extract the highest quality MP4 from it
-    const m3u8s = candidates.filter(c => c.includes('.m3u8'));
-    for (const m3u8 of m3u8s) {
-      const mp4 = await extractMp4FromPlaylist(m3u8);
-      if (mp4) push(mp4);
-    }
-
-    // Prioritize MP4s over m3u8s for smoother playback
-    candidates.sort((a, b) => (a.includes('.mp4') ? -1 : 1) - (b.includes('.mp4') ? -1 : 1));
+    // Regex scan of raw HTML for Twitter CDN URLs
+    const urlRegex = /https?:\/\/[^"'\s<>]+?(?:video\.twimg\.com|ext_tw_video)[^"'\s<>]*/g;
+    (rawHtml.match(urlRegex) || []).forEach(m => pushRaw(m.replace(/[.,;:]+$/, '')));
 
     return candidates;
   }
 
+  // Understands /video/{sig}/…, /video/enc/{sig}/…, /vid/{sig}/… and old /vid/… routes
   function decodeNitterProxyUrl(raw) {
     if (!raw) return null;
-    let m = raw.match(/\/video\/enc\/[^\/]+\/([^?#]+)/);
+    let m = raw.match(/\/(?:video|vid)\/enc\/[^\/]+\/([^?#]+)/);
     if (m) {
       let b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
       while (b64.length % 4) b64 += '=';
       try { return atob(b64); } catch (e) {}
     }
-    m = raw.match(/\/video\/[^\/]+\/([^?#]+)/);
+    m = raw.match(/\/(?:video|vid)\/[^\/]+\/([^?#]+)/);
+    if (m) { try { return decodeURIComponent(m[1]); } catch (e) {} }
+    m = raw.match(/\/vid\/([^?#]+)/);
     if (m) { try { return decodeURIComponent(m[1]); } catch (e) {} }
     return null;
   }
@@ -409,7 +432,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
       let mp4 = lines.find(l => l.endsWith('.mp4'));
       if (mp4) return mp4.startsWith('http') ? mp4 : new URL(mp4, url).href;
-      
       const child = lines.find(l => l.endsWith('.m3u8'));
       if (child) {
         const childUrl = child.startsWith('http') ? child : new URL(child, url).href;
@@ -427,17 +449,12 @@ document.addEventListener('DOMContentLoaded', () => {
     video.controls = true; video.playsInline = true;
     if (poster) video.poster = poster;
     video.style.cssText = 'max-width:100%; border-radius:12px; display:block; background:black;';
-    
+
     let i = 0;
     video.addEventListener('error', () => {
       i++;
-      if (i < candidates.length) { 
-        video.src = candidates[i]; 
-        video.load(); 
-        video.play().catch(() => {}); 
-      } else {
-        showFallback(container, fallbackUrl, '🎬 Playback failed. Click to open on Nitter.');
-      }
+      if (i < candidates.length) { video.src = candidates[i]; video.load(); video.play().catch(() => {}); }
+      else showFallback(container, fallbackUrl, '🎬 Playback failed. Click to open on Nitter.');
     });
 
     video.src = candidates[0];
