@@ -1,7 +1,6 @@
-// app.js — X News Feed (works in Android WebView AND as Chrome extension / browser)
+// app.js — X News Feed (Android WebView + Browser compatible)
 
 /* ========== STORAGE ABSTRACTION ========== */
-/* localStorage on Android, chrome.storage in the extension */
 const store = {
   _has: typeof chrome !== 'undefined' && !!(chrome.storage && chrome.storage.local),
   get(keys, cb) {
@@ -21,7 +20,6 @@ const store = {
 };
 
 /* ========== FETCH ABSTRACTION + ANDROID BRIDGE ========== */
-/* On Android: native HTTP via Java bridge (no CORS). Elsewhere: normal fetch. */
 let _cbId = 0;
 const _cbs = {};
 
@@ -44,8 +42,8 @@ function nativeFetch(url) {
 }
 
 async function smartFetch(url) {
-  if (window.Android) return nativeFetch(url);      // Android: native, CORS-free
-  const res = await fetch(url);                     // Browser fallback
+  if (window.Android) return nativeFetch(url);
+  const res = await fetch(url);
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.text();
 }
@@ -63,12 +61,25 @@ document.addEventListener('DOMContentLoaded', () => {
   const viewFeed = document.getElementById('view-feed');
   const viewTrends = document.getElementById('view-trends');
 
-  const NITTER_INSTANCE = 'https://nitter.net'; // change if instance is down
+  const NITTER_INSTANCE = 'https://nitter.net';
 
   let currentView = 'feed';
   let trendsLoaded = false;
 
-  /* ---------- THEME ---------- */
+  // Remove button logic
+  document.body.addEventListener('click', (e) => {
+    if (e.target.classList.contains('remove-btn')) {
+      const userToRemove = e.target.getAttribute('data-user');
+      store.get(['usernames'], (r) => {
+        let list = r.usernames || [];
+        list = list.filter(u => u !== userToRemove);
+        store.set({ usernames: list }, () => {
+          document.querySelectorAll(`.tweet-card[data-user="${userToRemove}"]`).forEach(el => el.remove());
+        });
+      });
+    }
+  });
+
   store.get(['darkMode'], (r) => applyTheme(!!r.darkMode));
   themeBtn.addEventListener('click', () => {
     const dark = !document.body.classList.contains('dark');
@@ -80,7 +91,6 @@ document.addEventListener('DOMContentLoaded', () => {
     themeBtn.textContent = dark ? '☀️' : '🌙';
   }
 
-  /* ---------- VIEWS / TABS ---------- */
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
       const view = tab.dataset.view;
@@ -100,7 +110,6 @@ document.addEventListener('DOMContentLoaded', () => {
     currentView === 'feed' ? reloadFeeds() : loadTrends();
   });
 
-  /* ---------- CONTROLS ---------- */
   loadBtn.addEventListener('click', () => {
     const u = usernameInput.value.trim().replace('@', '');
     if (u) { addAndFetchUser(u); usernameInput.value = ''; }
@@ -116,7 +125,6 @@ document.addEventListener('DOMContentLoaded', () => {
     popularSelect.value = '';
   });
 
-  /* ---------- FEEDS ---------- */
   function reloadFeeds() {
     feedContainer.innerHTML = '<div class="loader">Loading feeds…</div>';
     store.get(['usernames'], (r) => {
@@ -152,7 +160,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  /* ---------- TRENDING (newest posts from all curated channels) ---------- */
   function getCuratedChannels() {
     const channels = [];
     popularSelect.querySelectorAll('optgroup').forEach(group => {
@@ -190,7 +197,7 @@ document.addEventListener('DOMContentLoaded', () => {
             collected.push({ item, username: ch.handle, avatarUrl: avatar, cat: ch.cat });
           });
         }
-      } catch (e) { /* skip failed channel */ }
+      } catch (e) {}
       done++;
       loader.textContent = `Fetching latest news… ${done}/${channels.length}`;
     }));
@@ -210,11 +217,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     collected.slice(0, 30).forEach(c => trendContainer.appendChild(buildTweetCard(c.item, c)));
-
     header.innerHTML = `🔥 Latest from ${channels.length} top channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
   }
 
-  /* ---------- SHARED CARD BUILDER ---------- */
   function buildTweetCard(item, { username, avatarUrl = '', cat = '' }) {
     const title = item.querySelector('title')?.textContent || '';
     const creatorNode = item.getElementsByTagName('dc:creator')[0] || item.getElementsByTagName('creator')[0];
@@ -243,6 +248,7 @@ document.addEventListener('DOMContentLoaded', () => {
       : fallbackAvatarHtml(creator);
 
     const chip = cat ? `<span class="cat-chip" title="${cat === 'ai' ? 'AI channel' : 'News channel'}">${cat === 'ai' ? '🤖' : '📰'}</span>` : '';
+    const removeBtn = `<button class="remove-btn" data-user="${username}" title="Remove ${username}">❌</button>`;
 
     let mediaHtml = '';
     if (img) {
@@ -254,9 +260,6 @@ document.addEventListener('DOMContentLoaded', () => {
         : `<img src="${img.src}" class="tweet-image" alt="Tweet image">`;
     }
 
-    // NEW: Remove button
-    const removeBtn = `<button class="remove-btn" data-user="${username}" title="Remove ${username}">❌</button>`;
-    
     card.innerHTML = `
       <div class="tweet-header">
         <div class="tweet-user">${avatarHtml}<strong>${escapeHtml(creator)}</strong>${chip}</div>
@@ -278,7 +281,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return card;
   }
 
-  /* ---------- HELPERS ---------- */
   function richTextHtml(node) {
     let out = '';
     node.childNodes.forEach(child => {
@@ -317,7 +319,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
-  /* ---------- VIDEO ---------- */
+  /* ========== IMPROVED VIDEO FETCHING ========== */
   async function handleVideoPlayback(container) {
     const tid = container.getAttribute('data-tweet-id');
     const uname = container.getAttribute('data-username');
@@ -328,38 +330,62 @@ document.addEventListener('DOMContentLoaded', () => {
     if (overlay) { overlay.textContent = 'Loading video...'; overlay.style.fontSize = '12px'; }
 
     try {
-      const text = await smartFetch(fallbackUrl);
-      const doc = new DOMParser().parseFromString(text, 'text/html');
-      const candidates = await collectVideoCandidates(doc);
+      const rawHtml = await smartFetch(fallbackUrl);
+      const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
+      
+      // Pass raw HTML for regex fallback
+      const candidates = await collectVideoCandidates(doc, rawHtml);
+      
       if (candidates.length) injectVideoPlayer(container, candidates, poster, fallbackUrl);
       else showFallback(container, fallbackUrl, '🎬 Video not found. Click to open on Nitter.');
     } catch (err) {
+      console.error(err);
       showFallback(container, fallbackUrl, '🎬 Error loading video. Click to open on Nitter.');
     }
   }
 
-  async function collectVideoCandidates(doc) {
+  async function collectVideoCandidates(doc, rawHtml) {
     const candidates = [];
     const push = u => { if (u && !candidates.includes(u)) candidates.push(u); };
-    const els = [
-      ...doc.querySelectorAll('video source[src]'),
-      ...doc.querySelectorAll('video[src]'),
-      ...doc.querySelectorAll('a.video-download[href]')
-    ];
-    for (const el of els) {
+
+    // 1. Look for MP4s in standard tags
+    doc.querySelectorAll('video source[src], video[src], a.video-download[href]').forEach(el => {
       const raw = el.getAttribute('src') || el.getAttribute('href');
-      if (!raw) continue;
+      if (!raw) return;
       const dec = decodeNitterProxyUrl(raw);
       if (dec && dec.includes('.mp4')) push(dec);
-      if (raw.startsWith('http') && raw.includes('.mp4')) push(raw);
+      if (raw.startsWith('http') && (raw.includes('.mp4') || raw.includes('video.twimg'))) push(raw);
       if (raw.startsWith('/') && raw.includes('.mp4')) push(NITTER_INSTANCE + raw);
-    }
-    const hlsEl = doc.querySelector('video[data-url]');
-    if (hlsEl) {
-      const raw = hlsEl.getAttribute('data-url');
+    });
+
+    // 2. Look for HLS (m3u8) in data-url. Android WebView plays m3u8 natively!
+    doc.querySelectorAll('video[data-url]').forEach(el => {
+      const raw = el.getAttribute('data-url');
+      if (!raw) return;
       const url = decodeNitterProxyUrl(raw) || (raw.startsWith('http') ? raw : NITTER_INSTANCE + raw);
-      push(await extractMp4FromPlaylist(url));
+      if (url.includes('.m3u8') || url.includes('video.twimg')) push(url);
+    });
+
+    // 3. Regex fallback: Search raw HTML for any direct video.twimg.com URLs
+    const urlRegex = /https?:\/\/[^"'\s<>]+?video\.twimg\.com[^"'\s<>]+/g;
+    const matches = rawHtml.match(urlRegex);
+    if (matches) {
+      matches.forEach(m => {
+        const cleanUrl = m.replace(/[.,;:]+$/, '');
+        if (cleanUrl.includes('.mp4') || cleanUrl.includes('.m3u8')) push(cleanUrl);
+      });
     }
+
+    // 4. If we found an m3u8, try to extract the highest quality MP4 from it
+    const m3u8s = candidates.filter(c => c.includes('.m3u8'));
+    for (const m3u8 of m3u8s) {
+      const mp4 = await extractMp4FromPlaylist(m3u8);
+      if (mp4) push(mp4);
+    }
+
+    // Prioritize MP4s over m3u8s for smoother playback
+    candidates.sort((a, b) => (a.includes('.mp4') ? -1 : 1) - (b.includes('.mp4') ? -1 : 1));
+
     return candidates;
   }
 
@@ -383,6 +409,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
       let mp4 = lines.find(l => l.endsWith('.mp4'));
       if (mp4) return mp4.startsWith('http') ? mp4 : new URL(mp4, url).href;
+      
       const child = lines.find(l => l.endsWith('.m3u8'));
       if (child) {
         const childUrl = child.startsWith('http') ? child : new URL(child, url).href;
@@ -399,13 +426,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const video = document.createElement('video');
     video.controls = true; video.playsInline = true;
     if (poster) video.poster = poster;
-    video.style.cssText = 'max-width:100%; border-radius:12px; display:block;';
+    video.style.cssText = 'max-width:100%; border-radius:12px; display:block; background:black;';
+    
     let i = 0;
     video.addEventListener('error', () => {
       i++;
-      if (i < candidates.length) { video.src = candidates[i]; video.load(); video.play().catch(() => {}); }
-      else showFallback(container, fallbackUrl, '🎬 Playback failed. Click to open on Nitter.');
+      if (i < candidates.length) { 
+        video.src = candidates[i]; 
+        video.load(); 
+        video.play().catch(() => {}); 
+      } else {
+        showFallback(container, fallbackUrl, '🎬 Playback failed. Click to open on Nitter.');
+      }
     });
+
     video.src = candidates[0];
     container.appendChild(video);
     video.play().catch(() => {});
@@ -416,21 +450,5 @@ document.addEventListener('DOMContentLoaded', () => {
     container.onclick = () => window.open(url, '_blank');
   }
 
-    // Global click listener to handle removing users
-  document.body.addEventListener('click', (e) => {
-    if (e.target.classList.contains('remove-btn')) {
-      const userToRemove = e.target.getAttribute('data-user');
-      store.get(['usernames'], (r) => {
-        let list = r.usernames || [];
-        list = list.filter(u => u !== userToRemove); // Filter out the clicked user
-        store.set({ usernames: list }, () => {
-          // Remove all cards for this user from the screen instantly
-          document.querySelectorAll(`.tweet-card[data-user="${userToRemove}"]`).forEach(el => el.remove());
-        });
-      });
-    }
-  });
-
-  /* ---------- INIT ---------- */
   reloadFeeds();
 });
