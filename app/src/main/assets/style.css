@@ -132,3 +132,10 @@ body {
 .error { background: #fff0f0; color: #d93025; padding: 10px; border-radius: 8px; margin-bottom: 10px; font-size: 13px; text-align: center; border: 1px solid #f5c2c7; }
 .loader { text-align: center; padding: 20px; color: var(--muted); }
 .empty-state { text-align: center; color: var(--muted); font-size: 14px; padding: 20px; }
+
+.remove-btn { 
+  background: none; border: none; color: #d93025; 
+  font-size: 14px; padding: 4px 8px; cursor: pointer; 
+  opacity: 0.6; border-radius: 50%; 
+}
+.remove-btn:active { opacity: 1; background: rgba(217, 48, 37, 0.1); }
