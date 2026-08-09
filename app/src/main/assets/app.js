@@ -254,10 +254,16 @@ document.addEventListener('DOMContentLoaded', () => {
         : `<img src="${img.src}" class="tweet-image" alt="Tweet image">`;
     }
 
+    // NEW: Remove button
+    const removeBtn = `<button class="remove-btn" data-user="${username}" title="Remove ${username}">❌</button>`;
+    
     card.innerHTML = `
       <div class="tweet-header">
         <div class="tweet-user">${avatarHtml}<strong>${escapeHtml(creator)}</strong>${chip}</div>
-        <span class="tweet-date" title="${new Date(pubDate).toLocaleString()}">${getRelativeTime(pubDate)}</span>
+        <div style="display:flex; align-items:center; gap:6px;">
+          ${removeBtn}
+          <span class="tweet-date" title="${new Date(pubDate).toLocaleString()}">${getRelativeTime(pubDate)}</span>
+        </div>
       </div>
       <div class="tweet-content">${contentHtml}</div>
       ${mediaHtml}
