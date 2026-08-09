@@ -6,6 +6,7 @@ import android.os.Bundle;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -41,7 +42,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void fetch(final String url, final String id) {
             new Thread(() -> {
-                String json;
+                String payload;
                 try {
                     HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
                     c.setRequestProperty("User-Agent", "XNewsFeedApp/1.0");
@@ -52,13 +53,29 @@ public class MainActivity extends Activity {
                         String line;
                         while ((line = r.readLine()) != null) sb.append(line).append('\n');
                     }
-                    json = new JSONObject().put("ok", true).put("body", sb.toString()).toString();
+                    
+                    JSONObject res = new JSONObject();
+                    res.put("ok", true);
+                    res.put("body", sb.toString());
+                    payload = JSONObject.quote(res.toString());
+                    
                 } catch (Exception e) {
-                    json = new JSONObject().put("ok", false).put("error", String.valueOf(e.getMessage())).toString();
+                    // FIX: Wrap the error JSON creation in its own try-catch 
+                    // so the compiler knows we are handling potential JSONExceptions here too.
+                    try {
+                        JSONObject res = new JSONObject();
+                        res.put("ok", false);
+                        res.put("error", e.getMessage() != null ? e.getMessage() : "Unknown error");
+                        payload = JSONObject.quote(res.toString());
+                    } catch (Exception jsonEx) {
+                        // Absolute fallback if JSON creation itself somehow fails
+                        payload = "\"{\\\"ok\\\":false,\\\"error\\\":\\\"JSON creation failed\\\"}\"";
+                    }
                 }
-                final String payload = JSONObject.quote(json);
+                
+                final String finalPayload = payload;
                 webView.post(() -> webView.evaluateJavascript(
-                        "window.__onFetch && window.__onFetch(" + JSONObject.quote(id) + ", " + payload + ")", null));
+                        "window.__onFetch && window.__onFetch(" + JSONObject.quote(id) + ", " + finalPayload + ")", null));
             }).start();
         }
     }
