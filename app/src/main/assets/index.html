@@ -57,6 +57,7 @@
         </optgroup>
         <optgroup label="💰 India Stocks">
           <option value="livemint">@livemint · LiveMint</option>
+          <option value="EconomicTimes">@EconomicTimes · Economic Times</option>
           <option value="NDTVProfit">@NDTVProfit · NDTV Profit</option>
           <option value="moneycontrolcom">@moneycontrolcom · Moneycontrol</option>
           <option value="ETNOWlive">@ETNOWlive · ET NOW</option>
@@ -81,6 +82,45 @@
           <option value="Megatron_ron">@Megatron_ron · Megatron</option>
           <option value="AlternatNews">@AlternatNews · Alternative News</option>
         </optgroup>
+        <optgroup label="💻 Tech News">
+          <option value="TechCrunch">@TechCrunch · TechCrunch</option>
+          <option value="mashable">@mashable · Mashable</option>
+          <option value="PCMag">@PCMag · PC Mag</option>
+          <option value="CNET">@CNET · CNET</option>
+          <option value="engadget">@engadget · Engadget</option>
+          <option value="howtogeek">@howtogeek · How-To Geek</option>
+          <option value="TechRepublic">@TechRepublic · TechRepublic</option>
+          <option value="Gizmodo">@Gizmodo · Gizmodo</option>
+          <option value="VentureBeat">@VentureBeat · VentureBeat</option>
+          <option value="voxdotcom">@voxdotcom · Vox Tech</option>
+          <option value="geekwire">@geekwire · GeekWire</option>
+          <option value="arstechnica">@arstechnica · Ars Technica</option>
+          <option value="AndroidPolice">@AndroidPolice · Android Police</option>
+          <option value="techradar">@techradar · TechRadar</option>
+          <option value="siliconrepublic">@siliconrepublic · Silicon Republic</option>
+          <option value="DigitalTrends">@DigitalTrends · Digital Trends</option>
+          <option value="slashgear">@slashgear · SlashGear</option>
+          <option value="slashdot">@slashdot · Slashdot</option>
+          <option value="BleepinComputer">@BleepinComputer · Bleeping Computer</option>
+          <option value="ZDNET">@ZDNET · ZDNet</option>
+          <option value="ExtremeTech">@ExtremeTech · ExtremeTech</option>
+          <option value="techdirt">@techdirt · TechDirt</option>
+          <option value="xdadevelopers">@xdadevelopers · XDA</option>
+          <option value="BGR">@BGR · BGR</option>
+          <option value="nypost">@nypost · NYPost Tech</option>
+          <option value="TechPowerUp">@TechPowerUp · TechPowerUp</option>
+          <option value="tomshardware">@tomshardware · Tom's Hardware</option>
+          <option value="petapixel">@petapixel · PetaPixel</option>
+          <option value="nbc_en">@nbc_en · Notebookcheck</option>
+          <option value="technology">@technology · Bloomberg Tech</option>
+          <option value="washingtonpost">@washingtonpost · WA Post Tech</option>
+          <option value="gizchina">@gizchina · GizChina</option>
+          <option value="RedSharkNews">@RedSharkNews · RedShark News</option>
+          <option value="HotHardware">@HotHardware · HotHardware</option>
+          <option value="Gadgets360">@Gadgets360 · Gadgets 360</option>
+          <option value="SiliconANGLE">@SiliconANGLE · Silicon Angle</option>
+          <option value="eetimes">@eetimes · EE Times</option>
+        </optgroup>
       </select>
       <button id="load-btn" class="btn btn-primary">Add</button>
       <button id="clear-btn" class="btn btn-icon" title="Clear all saved feeds">🗑</button>
@@ -88,15 +128,26 @@
     <div id="feed-container"></div>
   </section>
 
-  <!-- TRENDING VIEW with category dropdown -->
+  <!-- TRENDING VIEW -->
   <section id="view-trends" hidden>
     <select id="trend-category-select" class="trend-select" title="Choose a category">
       <option value="news">📰 News</option>
       <option value="ai">🤖 AI</option>
       <option value="stocks">💰 India Stocks</option>
       <option value="war">🌍 War News</option>
+      <option value="tech">💻 Tech News</option>
     </select>
     <div id="trend-container"></div>
+  </section>
+
+  <!-- CHANNEL VIEW (tap any username) -->
+  <section id="view-channel" hidden>
+    <div class="channel-bar">
+      <button id="channel-back-btn" class="hdr-btn" title="Back">←</button>
+      <div id="channel-chip" class="channel-chip">@</div>
+      <button id="channel-follow-btn" class="btn btn-primary">➕ Follow</button>
+    </div>
+    <div id="channel-container"></div>
   </section>
 
   <script src="app.js"></script>
