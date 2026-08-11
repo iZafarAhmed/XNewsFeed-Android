@@ -52,6 +52,7 @@ async function smartFetch(url) {
 document.addEventListener('DOMContentLoaded', () => {
   const feedContainer = document.getElementById('feed-container');
   const trendContainer = document.getElementById('trend-container');
+  const trendSelect = document.getElementById('trend-category-select');
   const usernameInput = document.getElementById('username-input');
   const loadBtn = document.getElementById('load-btn');
   const clearBtn = document.getElementById('clear-btn');
@@ -62,6 +63,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const viewTrends = document.getElementById('view-trends');
 
   const NITTER_INSTANCE = 'https://nitter.net';
+
+  const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍' };
+  const CAT_LABEL = { news: '📰 News', ai: '🤖 AI', stocks: '💰 India Stocks', war: '🌍 War News' };
 
   let currentView = 'feed';
   let trendsLoaded = false;
@@ -96,6 +100,12 @@ document.addEventListener('DOMContentLoaded', () => {
       switchView(view);
       if (view === 'trends' && !trendsLoaded) { trendsLoaded = true; loadTrends(); }
     });
+  });
+
+  // Category dropdown in Trending
+  trendSelect.addEventListener('change', () => {
+    trendsLoaded = true;
+    loadTrends();
   });
 
   function switchView(view) {
@@ -159,10 +169,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function getCuratedChannels() {
+  /* ---------- CATEGORIES (read from the ➕ dropdown = single source of truth) ---------- */
+  function categoryFromLabel(label) {
+    if (label.includes('AI')) return 'ai';
+    if (label.includes('Stocks')) return 'stocks';
+    if (label.includes('War')) return 'war';
+    return 'news';
+  }
+
+  function getCuratedChannels(category) {
     const channels = [];
     popularSelect.querySelectorAll('optgroup').forEach(group => {
-      const cat = group.label.includes('AI') ? 'ai' : 'news';
+      const cat = categoryFromLabel(group.label);
+      if (category && cat !== category) return; // filter by selected category
       group.querySelectorAll('option').forEach(opt => {
         if (opt.value) channels.push({ handle: opt.value, cat });
       });
@@ -171,16 +190,18 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function loadTrends() {
-    const channels = getCuratedChannels();
+    const category = trendSelect.value || 'news';
+    const channels = getCuratedChannels(category);
+
     trendContainer.innerHTML = '';
     const header = document.createElement('div');
     header.className = 'trend-header';
-    header.textContent = `🔥 Latest from ${channels.length} top channels`;
+    header.textContent = `🔥 ${CAT_LABEL[category]} — latest from ${channels.length} channels`;
     trendContainer.appendChild(header);
 
     const loader = document.createElement('div');
     loader.className = 'loader';
-    loader.textContent = `Fetching latest news… 0/${channels.length}`;
+    loader.textContent = `Fetching ${CAT_LABEL[category]}… 0/${channels.length}`;
     trendContainer.appendChild(loader);
 
     const collected = [];
@@ -198,7 +219,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } catch (e) {}
       done++;
-      loader.textContent = `Fetching latest news… ${done}/${channels.length}`;
+      loader.textContent = `Fetching ${CAT_LABEL[category]}… ${done}/${channels.length}`;
     }));
 
     loader.remove();
@@ -210,13 +231,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!collected.length) {
       const err = document.createElement('div');
       err.className = 'error';
-      err.textContent = 'Couldn\'t fetch any channel. Nitter might be down.';
+      err.textContent = 'Couldn\'t fetch any channel in this category. Nitter might be down.';
       trendContainer.appendChild(err);
       return;
     }
 
     collected.slice(0, 30).forEach(c => trendContainer.appendChild(buildTweetCard(c.item, c)));
-    header.innerHTML = `🔥 Latest from ${channels.length} top channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
+    header.innerHTML = `🔥 ${CAT_LABEL[category]} — latest from ${channels.length} channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
   }
 
   function buildTweetCard(item, { username, avatarUrl = '', cat = '' }) {
@@ -246,7 +267,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ? `<img class="avatar" src="${escapeAttr(avatarUrl)}" alt="">`
       : fallbackAvatarHtml(creator);
 
-    const chip = cat ? `<span class="cat-chip" title="${cat === 'ai' ? 'AI channel' : 'News channel'}">${cat === 'ai' ? '🤖' : '📰'}</span>` : '';
+    const chip = cat ? `<span class="cat-chip" title="${CAT_LABEL[cat] || ''}">${CAT_EMOJI[cat] || '📰'}</span>` : '';
     const removeBtn = `<button class="remove-btn" data-user="${username}" title="Remove ${username}">❌</button>`;
 
     let mediaHtml = '';
@@ -331,14 +352,12 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       let candidates = [];
 
-      // 1) Try Nitter page first
       try {
         const rawHtml = await smartFetch(fallbackUrl);
         const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
         candidates = await collectVideoCandidates(doc, rawHtml);
       } catch (e) {}
 
-      // 2) Fallback: FxTwitter public API (returns direct MP4s)
       if (!candidates.length) {
         try {
           const fx = JSON.parse(await smartFetch(`https://api.fxtwitter.com/${uname}/status/${tid}`));
@@ -346,7 +365,6 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {}
       }
 
-      // 3) Fallback: VxTwitter public API
       if (!candidates.length) {
         try {
           const vx = JSON.parse(await smartFetch(`https://api.vxtwitter.com/${uname}/status/${tid}`));
@@ -355,13 +373,11 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {}
       }
 
-      // Upgrade any m3u8 to mp4 if possible
       for (const m3u8 of candidates.filter(c => c.includes('.m3u8'))) {
         const mp4 = await extractMp4FromPlaylist(m3u8);
         if (mp4) pushUnique(candidates, mp4);
       }
 
-      // Prefer mp4 over m3u8
       candidates.sort((a, b) => (a.includes('.mp4') ? -1 : 1) - (b.includes('.mp4') ? -1 : 1));
 
       if (candidates.length) injectVideoPlayer(container, candidates, poster, fallbackUrl);
@@ -376,7 +392,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (u && u.startsWith('http') && !arr.includes(u)) arr.push(u);
   }
 
-  // Recursively collect every *.mp4 URL hidden anywhere in a JSON object
   function collectMp4s(obj, out = []) {
     if (typeof obj === 'string') {
       if (obj.startsWith('http') && obj.includes('.mp4')) out.push(obj);
@@ -402,14 +417,12 @@ document.addEventListener('DOMContentLoaded', () => {
       pushRaw(el.getAttribute('src') || el.getAttribute('data-url') || el.getAttribute('href'));
     });
 
-    // Regex scan of raw HTML for Twitter CDN URLs
     const urlRegex = /https?:\/\/[^"'\s<>]+?(?:video\.twimg\.com|ext_tw_video)[^"'\s<>]*/g;
     (rawHtml.match(urlRegex) || []).forEach(m => pushRaw(m.replace(/[.,;:]+$/, '')));
 
     return candidates;
   }
 
-  // Understands /video/{sig}/…, /video/enc/{sig}/…, /vid/{sig}/… and old /vid/… routes
   function decodeNitterProxyUrl(raw) {
     if (!raw) return null;
     let m = raw.match(/\/(?:video|vid)\/enc\/[^\/]+\/([^?#]+)/);
