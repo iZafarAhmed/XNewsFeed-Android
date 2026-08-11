@@ -25,7 +25,7 @@
   <section id="view-feed">
     <div class="controls-row">
       <input type="text" id="username-input" placeholder="Enter username" title="Enter any X username">
-      <select id="popular-select" class="compact-select" title="Add popular News & AI channels">
+      <select id="popular-select" class="compact-select" title="Add popular channels">
         <option value="">➕</option>
         <optgroup label="📰 NEWS">
           <option value="BBCBreaking">@BBCBreaking · BBC Breaking</option>
@@ -42,7 +42,6 @@
           <option value="CBSNews">@CBSNews · CBS News</option>
           <option value="FoxNews">@FoxNews · Fox News</option>
           <option value="Bloomberg">@Bloomberg · Bloomberg</option>
-          <option value="SciencNews">@SciencNews · Science News</option>
         </optgroup>
         <optgroup label="🤖 AI (Official)">
           <option value="OpenAI">@OpenAI · OpenAI</option>
@@ -56,6 +55,35 @@
           <option value="DeepSeekAI">@DeepSeekAI · DeepSeek</option>
           <option value="StabilityAI">@StabilityAI · Stability AI</option>
         </optgroup>
+        <optgroup label="💰 India Stocks">
+          <option value="livemint">@livemint · LiveMint</option>
+          <option value="EconomicTimes">@EconomicTimes · Economic Times</option>
+          <option value="NDTVProfit">@NDTVProfit · NDTV Profit</option>
+          <option value="moneycontrolcom">@moneycontrolcom · Moneycontrol</option>
+          <option value="ETNOWlive">@ETNOWlive · ET NOW</option>
+          <option value="ETmarkets">@ETmarkets · ET Markets</option>
+          <option value="CNBCTV18Live">@CNBCTV18Live · CNBC-TV18</option>
+          <option value="BT_India">@BT_India · Business Today</option>
+          <option value="ZeeBusiness">@ZeeBusiness · Zee Business</option>
+          <option value="FinancialXpress">@FinancialXpress · Financial Xpress</option>
+        </optgroup>
+        <optgroup label="🌍 War News">
+          <option value="HormuzLetter">@HormuzLetter · Hormuz Letter</option>
+          <option value="araghchi">@araghchi · Abbas Araghchi</option>
+          <option value="DaniMayakovski">@DaniMayakovski · Dani Mayakovski</option>
+          <option value="drpezeshkian">@drpezeshkian · Masoud Pezeshkian</option>
+          <option value="clashreport">@clashreport · Clash Report</option>
+          <option value="s_m_marandi">@s_m_marandi · Seyed Mohammad Marandi</option>
+          <option value="georgegalloway">@georgegalloway · George Galloway</option>
+          <option value="RyanRozbiani">@RyanRozbiani · Ryan Rozbiani</option>
+          <option value="DropSiteNews">@DropSiteNews · Drop Site News</option>
+          <option value="SuppressedNws1">@SuppressedNws1 · Suppressed News</option>
+          <option value="ivan_8848">@ivan_8848 · Ivan</option>
+          <option value="GlobalNewsMontr">@GlobalNewsMontr · Global News Montréal</option>
+          <option value="RT_com">@RT_com · RT</option>
+          <option value="Megatron_ron">@Megatron_ron · Megatron</option>
+          <option value="AlternatNews">@AlternatNews · Alternative News</option>
+        </optgroup>
       </select>
       <button id="load-btn" class="btn btn-primary">Add</button>
       <button id="clear-btn" class="btn btn-icon" title="Clear all saved feeds">🗑</button>
@@ -63,8 +91,14 @@
     <div id="feed-container"></div>
   </section>
 
-  <!-- TRENDING VIEW -->
+  <!-- TRENDING VIEW with category dropdown -->
   <section id="view-trends" hidden>
+    <select id="trend-category-select" class="trend-select" title="Choose a category">
+      <option value="news">📰 News</option>
+      <option value="ai">🤖 AI</option>
+      <option value="stocks">💰 India Stocks</option>
+      <option value="war">🌍 War News</option>
+    </select>
     <div id="trend-container"></div>
   </section>
 
