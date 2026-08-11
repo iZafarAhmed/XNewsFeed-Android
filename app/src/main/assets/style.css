@@ -139,3 +139,19 @@ body {
   opacity: 0.6; border-radius: 50%; 
 }
 .remove-btn:active { opacity: 1; background: rgba(217, 48, 37, 0.1); }
+
+/* Trending category dropdown */
+.trend-select {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  outline: none;
+  cursor: pointer;
+}
+.trend-select:focus { border-color: var(--accent); }
