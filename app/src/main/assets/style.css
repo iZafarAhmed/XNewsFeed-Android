@@ -155,3 +155,12 @@ body {
   cursor: pointer;
 }
 .trend-select:focus { border-color: var(--accent); }
+
+/* Channel view bar */
+.channel-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.channel-chip {
+  flex: 1; padding: 8px 12px; border-radius: 999px;
+  background: var(--chip); font-size: 13px; font-weight: 700;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tweet-user { cursor: pointer; }
