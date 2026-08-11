@@ -53,6 +53,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const feedContainer = document.getElementById('feed-container');
   const trendContainer = document.getElementById('trend-container');
   const trendSelect = document.getElementById('trend-category-select');
+  const channelContainer = document.getElementById('channel-container');
+  const channelChip = document.getElementById('channel-chip');
+  const channelBackBtn = document.getElementById('channel-back-btn');
+  const channelFollowBtn = document.getElementById('channel-follow-btn');
   const usernameInput = document.getElementById('username-input');
   const loadBtn = document.getElementById('load-btn');
   const clearBtn = document.getElementById('clear-btn');
@@ -61,14 +65,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const themeBtn = document.getElementById('theme-btn');
   const viewFeed = document.getElementById('view-feed');
   const viewTrends = document.getElementById('view-trends');
+  const viewChannel = document.getElementById('view-channel');
 
   const NITTER_INSTANCE = 'https://nitter.net';
 
-  const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍' };
-  const CAT_LABEL = { news: '📰 News', ai: '🤖 AI', stocks: '💰 India Stocks', war: '🌍 War News' };
+  const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻' };
+  const CAT_LABEL = { news: '📰 News', ai: '🤖 AI', stocks: '💰 India Stocks', war: '🌍 War News', tech: '💻 Tech News' };
 
   let currentView = 'feed';
+  let lastTab = 'feed';
   let trendsLoaded = false;
+  let currentChannelUser = '';
 
   // Remove single user
   document.body.addEventListener('click', (e) => {
@@ -94,6 +101,7 @@ document.addEventListener('DOMContentLoaded', () => {
     themeBtn.textContent = dark ? '☀️' : '🌙';
   }
 
+  /* ---------- VIEWS ---------- */
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
       const view = tab.dataset.view;
@@ -102,23 +110,31 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Category dropdown in Trending
-  trendSelect.addEventListener('change', () => {
-    trendsLoaded = true;
-    loadTrends();
+  trendSelect.addEventListener('change', () => { trendsLoaded = true; loadTrends(); });
+  channelBackBtn.addEventListener('click', () => switchView(lastTab));
+  channelFollowBtn.addEventListener('click', () => {
+    if (!currentChannelUser) return;
+    addAndFetchUser(currentChannelUser);
+    channelFollowBtn.textContent = '✓ Following';
+    setTimeout(() => { channelFollowBtn.textContent = '➕ Follow'; }, 1500);
   });
 
   function switchView(view) {
     currentView = view;
+    if (view === 'feed' || view === 'trends') lastTab = view;
     viewFeed.hidden = view !== 'feed';
     viewTrends.hidden = view !== 'trends';
-    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === view));
+    viewChannel.hidden = view !== 'channel';
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === lastTab));
   }
 
   refreshBtn.addEventListener('click', () => {
-    currentView === 'feed' ? reloadFeeds() : loadTrends();
+    if (currentView === 'feed') reloadFeeds();
+    else if (currentView === 'trends') loadTrends();
+    else if (currentView === 'channel') openChannel(currentChannelUser);
   });
 
+  /* ---------- CONTROLS ---------- */
   loadBtn.addEventListener('click', () => {
     const u = usernameInput.value.trim().replace('@', '');
     if (u) { addAndFetchUser(u); usernameInput.value = ''; }
@@ -134,6 +150,7 @@ document.addEventListener('DOMContentLoaded', () => {
     popularSelect.value = '';
   });
 
+  /* ---------- FEEDS ---------- */
   function reloadFeeds() {
     feedContainer.innerHTML = '<div class="loader">Loading feeds…</div>';
     store.get(['usernames'], (r) => {
@@ -169,11 +186,33 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  /* ---------- CATEGORIES (read from the ➕ dropdown = single source of truth) ---------- */
+  /* ---------- CHANNEL VIEW (tap a username) ---------- */
+  async function openChannel(username) {
+    const handle = (username || '').replace('@', '').trim();
+    if (!handle) return;
+    currentChannelUser = handle;
+    switchView('channel');
+    channelChip.textContent = '@' + handle;
+    channelContainer.innerHTML = '<div class="loader">Loading @' + escapeHtml(handle) + '…</div>';
+    try {
+      const text = await smartFetch(`${NITTER_INSTANCE}/${handle}/rss`);
+      const xml = new DOMParser().parseFromString(text, 'text/xml');
+      const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
+      const items = xml.querySelectorAll('item');
+      channelContainer.innerHTML = '';
+      if (!items.length) { channelContainer.innerHTML = '<p class="empty-state">No posts found.</p>'; return; }
+      items.forEach(item => channelContainer.appendChild(buildTweetCard(item, { username: handle, avatarUrl: avatar })));
+    } catch (e) {
+      channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '. Nitter might be down.</div>';
+    }
+  }
+
+  /* ---------- CATEGORIES ---------- */
   function categoryFromLabel(label) {
     if (label.includes('AI')) return 'ai';
     if (label.includes('Stocks')) return 'stocks';
     if (label.includes('War')) return 'war';
+    if (label.includes('Tech')) return 'tech';
     return 'news';
   }
 
@@ -181,7 +220,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const channels = [];
     popularSelect.querySelectorAll('optgroup').forEach(group => {
       const cat = categoryFromLabel(group.label);
-      if (category && cat !== category) return; // filter by selected category
+      if (category && cat !== category) return;
       group.querySelectorAll('option').forEach(opt => {
         if (opt.value) channels.push({ handle: opt.value, cat });
       });
@@ -240,6 +279,7 @@ document.addEventListener('DOMContentLoaded', () => {
     header.innerHTML = `🔥 ${CAT_LABEL[category]} — latest from ${channels.length} channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
   }
 
+  /* ---------- CARD BUILDER ---------- */
   function buildTweetCard(item, { username, avatarUrl = '', cat = '' }) {
     const title = item.querySelector('title')?.textContent || '';
     const creatorNode = item.getElementsByTagName('dc:creator')[0] || item.getElementsByTagName('creator')[0];
@@ -292,6 +332,9 @@ document.addEventListener('DOMContentLoaded', () => {
       ${mediaHtml}
       <a href="${link}" target="_blank" class="tweet-link">View on X (Twitter) ↗</a>`;
 
+    // ✅ Tap username/avatar → open that channel's full feed
+    card.querySelector('.tweet-user').addEventListener('click', () => openChannel(username));
+
     const av = card.querySelector('img.avatar');
     if (av) av.addEventListener('error', () => { av.outerHTML = fallbackAvatarHtml(creator); });
 
@@ -301,6 +344,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return card;
   }
 
+  /* ---------- HELPERS ---------- */
   function richTextHtml(node) {
     let out = '';
     node.childNodes.forEach(child => {
@@ -404,7 +448,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function collectVideoCandidates(doc, rawHtml) {
     const candidates = [];
-
     const pushRaw = raw => {
       if (!raw) return;
       const dec = decodeNitterProxyUrl(raw);
