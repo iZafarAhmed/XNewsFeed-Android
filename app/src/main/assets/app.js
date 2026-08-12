@@ -69,15 +69,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const NITTER_INSTANCE = 'https://nitter.net';
 
-  const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻' };
-  const CAT_LABEL = { news: '📰 News', ai: '🤖 AI', stocks: '💰 India Stocks', war: '🌍 War News', tech: '💻 Tech News' };
+  // ✅ Updated: added crypto and business
+  const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻', crypto: '🪙', business: '💼' };
+  const CAT_LABEL = {
+    news: '📰 News', ai: '🤖 AI', stocks: '💰 India Stocks',
+    war: '🌍 War News', tech: '💻 Tech News',
+    crypto: '🪙 Crypto', business: '💼 Business'
+  };
 
   let currentView = 'feed';
   let lastTab = 'feed';
   let trendsLoaded = false;
   let currentChannelUser = '';
 
-  // Remove single user
   document.body.addEventListener('click', (e) => {
     if (e.target.classList.contains('remove-btn')) {
       const userToRemove = e.target.getAttribute('data-user');
@@ -101,7 +105,6 @@ document.addEventListener('DOMContentLoaded', () => {
     themeBtn.textContent = dark ? '☀️' : '🌙';
   }
 
-  /* ---------- VIEWS ---------- */
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
       const view = tab.dataset.view;
@@ -134,7 +137,6 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (currentView === 'channel') openChannel(currentChannelUser);
   });
 
-  /* ---------- CONTROLS ---------- */
   loadBtn.addEventListener('click', () => {
     const u = usernameInput.value.trim().replace('@', '');
     if (u) { addAndFetchUser(u); usernameInput.value = ''; }
@@ -150,7 +152,6 @@ document.addEventListener('DOMContentLoaded', () => {
     popularSelect.value = '';
   });
 
-  /* ---------- FEEDS ---------- */
   function reloadFeeds() {
     feedContainer.innerHTML = '<div class="loader">Loading feeds…</div>';
     store.get(['usernames'], (r) => {
@@ -186,7 +187,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  /* ---------- CHANNEL VIEW (tap a username) ---------- */
   async function openChannel(username) {
     const handle = (username || '').replace('@', '').trim();
     if (!handle) return;
@@ -207,12 +207,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  /* ---------- CATEGORIES ---------- */
+  // ✅ Updated: added crypto and business detection
   function categoryFromLabel(label) {
     if (label.includes('AI')) return 'ai';
     if (label.includes('Stocks')) return 'stocks';
     if (label.includes('War')) return 'war';
     if (label.includes('Tech')) return 'tech';
+    if (label.includes('Crypto')) return 'crypto';
+    if (label.includes('Business')) return 'business';
     return 'news';
   }
 
@@ -279,7 +281,6 @@ document.addEventListener('DOMContentLoaded', () => {
     header.innerHTML = `🔥 ${CAT_LABEL[category]} — latest from ${channels.length} channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
   }
 
-  /* ---------- CARD BUILDER ---------- */
   function buildTweetCard(item, { username, avatarUrl = '', cat = '' }) {
     const title = item.querySelector('title')?.textContent || '';
     const creatorNode = item.getElementsByTagName('dc:creator')[0] || item.getElementsByTagName('creator')[0];
@@ -332,7 +333,6 @@ document.addEventListener('DOMContentLoaded', () => {
       ${mediaHtml}
       <a href="${link}" target="_blank" class="tweet-link">View on X (Twitter) ↗</a>`;
 
-    // ✅ Tap username/avatar → open that channel's full feed
     card.querySelector('.tweet-user').addEventListener('click', () => openChannel(username));
 
     const av = card.querySelector('img.avatar');
@@ -344,7 +344,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return card;
   }
 
-  /* ---------- HELPERS ---------- */
   function richTextHtml(node) {
     let out = '';
     node.childNodes.forEach(child => {
@@ -383,7 +382,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
-  /* ========== VIDEO (Nitter + FxTwitter/VxTwitter fallbacks) ========== */
+  /* ========== VIDEO ========== */
   async function handleVideoPlayback(container) {
     const tid = container.getAttribute('data-tweet-id');
     const uname = container.getAttribute('data-username');
