@@ -154,13 +154,11 @@ document.addEventListener('DOMContentLoaded', () => {
     contentEl.innerHTML = results.map(h => `<p class="tweet-paragraph">${h}</p>`).join('');
   }
 
-  // Translates text via MyMemory, chunking if needed (API limit ~500 chars)
+    // Translates text (auto-detect), chunking very long text
   async function translateText(text) {
-    if (!text) return text;
-    const MAX = 450;
-    if (text.length <= MAX) return await callMyMemory(text);
+    const MAX = 500;
+    if (text.length <= MAX) return await translateChunk(text);
 
-    // Split into chunks on sentence boundaries
     const chunks = [];
     let remaining = text;
     while (remaining.length > MAX) {
@@ -173,22 +171,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (remaining) chunks.push(remaining);
 
-    const translatedChunks = await Promise.all(chunks.map(callMyMemory));
-    return translatedChunks.join(' ');
+    const out = [];
+    for (const c of chunks) out.push(await translateChunk(c)); // sequential = no rate limits
+    return out.join(' ');
   }
 
-  async function callMyMemory(text) {
-    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=auto|en`;
-    const body = await smartFetch(url);
-    const data = JSON.parse(body);
-    if (data.responseStatus === 200 && data.responseData?.translatedText) {
-      let t = data.responseData.translatedText;
-      // MyMemory sometimes returns all-caps for short strings — normalize
-      if (t === t.toUpperCase() && text !== text.toUpperCase()) {
-        t = t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+  async function translateChunk(text) {
+    // 1) Google free endpoint — auto-detects Turkish, Arabic, Russian, etc.
+    try {
+      const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&dj=1&q=' + encodeURIComponent(text);
+      const data = JSON.parse(await smartFetch(url));
+      if (data && Array.isArray(data.sentences)) {
+        const out = data.sentences.map(s => s.trans || '').join('');
+        if (out.trim()) return out;
       }
-      return t;
-    }
+    } catch (e) { /* fall through to fallback */ }
+
+    // 2) Fallback: Lingva (public Google-Translate mirror)
+    try {
+      const data = JSON.parse(await smartFetch('https://lingva.ml/api/v1/auto/en/' + encodeURIComponent(text)));
+      if (data && data.translation) return data.translation;
+    } catch (e) {}
+
     throw new Error('translation failed');
   }
 
