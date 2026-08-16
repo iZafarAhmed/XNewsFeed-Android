@@ -83,7 +83,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let trendsLoaded = false;
   let currentChannelUser = '';
 
-  document.body.addEventListener('click', (e) => {
+   document.body.addEventListener('click', (e) => {
+    // Remove user
     if (e.target.classList.contains('remove-btn')) {
       const userToRemove = e.target.getAttribute('data-user');
       store.get(['usernames'], (r) => {
@@ -93,7 +94,103 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       });
     }
+
+    // Translate tweet
+    if (e.target.classList.contains('translate-btn')) {
+      const btn = e.target;
+      const card = btn.closest('.tweet-card');
+      const contentEl = card.querySelector('.tweet-content');
+      if (!contentEl) return;
+
+      // Toggle: if already translated, revert to original
+      if (contentEl.dataset.translated === '1') {
+        contentEl.innerHTML = contentEl.dataset.original;
+        delete contentEl.dataset.translated;
+        btn.textContent = '🌐';
+        btn.title = 'Translate to English';
+        return;
+      }
+
+      // Save original before translating
+      if (!contentEl.dataset.original) contentEl.dataset.original = contentEl.innerHTML;
+
+      btn.disabled = true;
+      btn.textContent = '⏳';
+
+      translateContent(contentEl)
+        .then(() => {
+          contentEl.dataset.translated = '1';
+          btn.textContent = '🔄';
+          btn.title = 'Show original';
+        })
+        .catch(() => {
+          btn.textContent = '❗';
+          setTimeout(() => { btn.textContent = '🌐'; }, 2000);
+        })
+        .finally(() => { btn.disabled = false; });
+    }
   });
+
+  /* ========== TRANSLATION (MyMemory API — free, no key) ========== */
+  async function translateContent(contentEl) {
+    // Extract raw text per paragraph, translate each, re-render with original links
+    const paragraphs = contentEl.querySelectorAll('.tweet-paragraph');
+    if (!paragraphs.length) return;
+
+    const results = await Promise.all(
+      Array.from(paragraphs).map(async p => {
+        const originalHtml = p.innerHTML;
+        const plainText = p.textContent.trim();
+        if (!plainText) return originalHtml;
+        try {
+          const translated = await translateText(plainText);
+          return `<span class="translated-tag">EN</span> ${escapeHtml(translated)}`;
+        } catch (e) {
+          return originalHtml; // keep original on failure
+        }
+      })
+    );
+
+    contentEl.innerHTML = results.map(h => `<p class="tweet-paragraph">${h}</p>`).join('');
+  }
+
+  // Translates text via MyMemory, chunking if needed (API limit ~500 chars)
+  async function translateText(text) {
+    if (!text) return text;
+    const MAX = 450;
+    if (text.length <= MAX) return await callMyMemory(text);
+
+    // Split into chunks on sentence boundaries
+    const chunks = [];
+    let remaining = text;
+    while (remaining.length > MAX) {
+      let cut = remaining.lastIndexOf('.', MAX);
+      if (cut < MAX * 0.5) cut = remaining.lastIndexOf('!', MAX);
+      if (cut < MAX * 0.5) cut = remaining.lastIndexOf('?', MAX);
+      if (cut < MAX * 0.5) cut = MAX;
+      chunks.push(remaining.slice(0, cut + 1));
+      remaining = remaining.slice(cut + 1).trimStart();
+    }
+    if (remaining) chunks.push(remaining);
+
+    const translatedChunks = await Promise.all(chunks.map(callMyMemory));
+    return translatedChunks.join(' ');
+  }
+
+  async function callMyMemory(text) {
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=auto|en`;
+    const body = await smartFetch(url);
+    const data = JSON.parse(body);
+    if (data.responseStatus === 200 && data.responseData?.translatedText) {
+      let t = data.responseData.translatedText;
+      // MyMemory sometimes returns all-caps for short strings — normalize
+      if (t === t.toUpperCase() && text !== text.toUpperCase()) {
+        t = t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+      }
+      return t;
+    }
+    throw new Error('translation failed');
+  }
 
   store.get(['darkMode'], (r) => applyTheme(!!r.darkMode));
   themeBtn.addEventListener('click', () => {
@@ -313,6 +410,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const chip = cat ? `<span class="cat-chip" title="${CAT_LABEL[cat] || ''}">${CAT_EMOJI[cat] || '📰'}</span>` : '';
     const removeBtn = `<button class="remove-btn" data-user="${username}" title="Remove ${username}">❌</button>`;
+    const translateBtn = `<button class="translate-btn" data-user="${username}" title="Translate to English">🌐</button>`;
 
     let mediaHtml = '';
     if (img) {
@@ -328,6 +426,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="tweet-header">
         <div class="tweet-user">${avatarHtml}<strong>${escapeHtml(creator)}</strong>${chip}</div>
         <div style="display:flex; align-items:center; gap:6px;">
+          ${translateBtn}
           ${removeBtn}
           <span class="tweet-date" title="${new Date(pubDate).toLocaleString()}">${getRelativeTime(pubDate)}</span>
         </div>
