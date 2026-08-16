@@ -164,3 +164,24 @@ body {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .tweet-user { cursor: pointer; }
+
+/* Translate button (sits next to the ❌ remove button) */
+.translate-btn {
+  background: none; border: none; color: var(--accent);
+  font-size: 14px; padding: 4px 8px; cursor: pointer;
+  opacity: 0.8; border-radius: 50%;
+}
+.translate-btn:active { opacity: 1; background: rgba(29, 155, 240, 0.1); }
+.translate-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.translated-tag {
+  display: inline-block;
+  font-size: 10px;
+  background: var(--accent);
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+  font-weight: 700;
+}
