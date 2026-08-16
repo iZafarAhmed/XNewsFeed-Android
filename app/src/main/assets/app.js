@@ -70,11 +70,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const NITTER_INSTANCE = 'https://nitter.net';
 
   // ✅ Updated: added crypto and business
-  const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻', crypto: '🪙', business: '💼' };
+  const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻', crypto: '🪙', business: '💼', science: '🔬', world: '🌐' };
   const CAT_LABEL = {
     news: '📰 News', ai: '🤖 AI', stocks: '💰 India Stocks',
     war: '🌍 War News', tech: '💻 Tech News',
-    crypto: '🪙 Crypto', business: '💼 Business'
+    crypto: '🪙 Crypto', business: '💼 Business',
+    science: '🔬 Science', world: '🌐 World News'
   };
 
   let currentView = 'feed';
@@ -215,6 +216,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (label.includes('Tech')) return 'tech';
     if (label.includes('Crypto')) return 'crypto';
     if (label.includes('Business')) return 'business';
+    if (label.includes('Science')) return 'science';
+    if (label.includes('World')) return 'world';
     return 'news';
   }
 
