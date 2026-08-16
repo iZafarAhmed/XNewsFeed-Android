@@ -394,6 +394,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const link = item.querySelector('link')?.textContent || '#';
     const tweetId = item.querySelector('guid')?.textContent || '';
 
+    // ✅ Convert Nitter URL → original X post URL
+    let xUrl = link;
+    try {
+      const u = new URL(link);
+      xUrl = 'https://x.com' + u.pathname;   // https://x.com/user/status/id
+    } catch (e) {}
+
     const card = document.createElement('div');
     card.className = 'tweet-card';
     card.setAttribute('data-user', username);
@@ -437,7 +444,7 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
       <div class="tweet-content">${contentHtml}</div>
       ${mediaHtml}
-      <a href="${link}" target="_blank" class="tweet-link">View on X (Twitter) ↗</a>`;
+      <a href="${xUrl}" target="_blank" class="tweet-link">View on X (Twitter) ↗</a>`;
 
     card.querySelector('.tweet-user').addEventListener('click', () => openChannel(username));
 
@@ -459,7 +466,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (tag === 'br') out += '<br>';
         else if (tag === 'a') {
           let href = child.getAttribute('href') || '#';
-          if (href.startsWith('/')) href = NITTER_INSTANCE + href;
+            if (href.startsWith('/')) href = 'https://x.com' + href;
           out += `<a href="${escapeAttr(href)}" target="_blank" class="tweet-inline-link">${richTextHtml(child)}</a>`;
         } else out += richTextHtml(child);
       }
