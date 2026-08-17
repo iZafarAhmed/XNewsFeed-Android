@@ -81,6 +81,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentView = 'feed';
   let lastTab = 'feed';
   let trendsLoaded = false;
+  let feedLoaded = false;
   let currentChannelUser = '';
 
    document.body.addEventListener('click', (e) => {
@@ -212,6 +213,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const view = tab.dataset.view;
       switchView(view);
       if (view === 'trends' && !trendsLoaded) { trendsLoaded = true; loadTrends(); }
+      if (view === 'feed' && !feedLoaded) { feedLoaded = true; reloadFeeds(); }
     });
   });
 
@@ -358,7 +360,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const xml = new DOMParser().parseFromString(text, 'text/xml');
         if (!xml.querySelector('parsererror')) {
           const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
-          [...xml.querySelectorAll('item')].slice(0, 2).forEach(item => {
+          [...xml.querySelectorAll('item')].slice(0, 3).forEach(item => {
             collected.push({ item, username: ch.handle, avatarUrl: avatar, cat: ch.cat });
           });
         }
@@ -381,7 +383,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    collected.slice(0, 30).forEach(c => trendContainer.appendChild(buildTweetCard(c.item, c)));
+    collected.forEach(c => trendContainer.appendChild(buildTweetCard(c.item, c)));
     header.innerHTML = `🔥 ${CAT_LABEL[category]} — latest from ${channels.length} channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
   }
 
@@ -635,5 +637,8 @@ document.addEventListener('DOMContentLoaded', () => {
     container.onclick = () => window.open(url, '_blank');
   }
 
-  reloadFeeds();
+  // ✅ App now opens directly on Trending (World News)
+  switchView('trends');
+  trendsLoaded = true;
+  loadTrends();
 });
