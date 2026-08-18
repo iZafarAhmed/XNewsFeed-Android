@@ -83,8 +83,16 @@ document.addEventListener('DOMContentLoaded', () => {
   let trendsLoaded = false;
   let feedLoaded = false;
   let currentChannelUser = '';
+  let channelMode = 'user';        // 'user' | 'search'
+  let currentSearchQuery = '';
 
-   document.body.addEventListener('click', (e) => {
+  document.body.addEventListener('click', (e) => {
+    // ✅ In-app hashtag / search links
+    const searchLink = e.target.closest('.in-app-search');
+    if (searchLink) { e.preventDefault(); openSearch(searchLink.getAttribute('data-query')); return; }
+    const userLink = e.target.closest('.in-app-user');
+    if (userLink) { e.preventDefault(); openChannel(userLink.getAttribute('data-user')); return; }
+
     // Remove user
     if (e.target.classList.contains('remove-btn')) {
       const userToRemove = e.target.getAttribute('data-user');
@@ -238,7 +246,7 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshBtn.addEventListener('click', () => {
     if (currentView === 'feed') reloadFeeds();
     else if (currentView === 'trends') loadTrends();
-    else if (currentView === 'channel') openChannel(currentChannelUser);
+    else if (currentView === 'channel') (channelMode === 'search' ? openSearch(currentSearchQuery) : openChannel(currentChannelUser));
   });
 
   loadBtn.addEventListener('click', () => {
@@ -295,6 +303,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const handle = (username || '').replace('@', '').trim();
     if (!handle) return;
     currentChannelUser = handle;
+    channelMode = 'user';
+    channelFollowBtn.style.display = '';
     switchView('channel');
     channelChip.textContent = '@' + handle;
     channelContainer.innerHTML = '<div class="loader">Loading @' + escapeHtml(handle) + '…</div>';
@@ -308,6 +318,31 @@ document.addEventListener('DOMContentLoaded', () => {
       items.forEach(item => channelContainer.appendChild(buildTweetCard(item, { username: handle, avatarUrl: avatar })));
     } catch (e) {
       channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '. Nitter might be down.</div>';
+    }
+  }
+
+  /* ✅ In-app hashtag / search results (Nitter search RSS) */
+  async function openSearch(query) {
+    if (!query) return;
+    currentSearchQuery = query;
+    channelMode = 'search';
+    channelFollowBtn.style.display = 'none';
+    switchView('channel');
+    channelChip.textContent = '🔍 ' + query;
+    channelContainer.innerHTML = '<div class="loader">Searching ' + escapeHtml(query) + '…</div>';
+    try {
+      const text = await smartFetch(`${NITTER_INSTANCE}/search/rss?f=search&q=${encodeURIComponent(query)}`);
+      const xml = new DOMParser().parseFromString(text, 'text/xml');
+      const items = xml.querySelectorAll('item');
+      channelContainer.innerHTML = '';
+      if (!items.length) { channelContainer.innerHTML = '<p class="empty-state">No posts found for ' + escapeHtml(query) + '.</p>'; return; }
+      items.forEach(item => {
+        const creatorNode = item.getElementsByTagName('dc:creator')[0] || item.getElementsByTagName('creator')[0];
+        const handle = (creatorNode ? creatorNode.textContent : '').replace('@', '').trim() || 'unknown';
+        channelContainer.appendChild(buildTweetCard(item, { username: handle }));
+      });
+    } catch (e) {
+      channelContainer.innerHTML = '<div class="error">Couldn\'t load results for ' + escapeHtml(query) + '.</div>';
     }
   }
 
@@ -467,9 +502,22 @@ document.addEventListener('DOMContentLoaded', () => {
         const tag = child.tagName.toLowerCase();
         if (tag === 'br') out += '<br>';
         else if (tag === 'a') {
-          let href = child.getAttribute('href') || '#';
-            if (href.startsWith('/')) href = 'https://x.com' + href;
-          out += `<a href="${escapeAttr(href)}" target="_blank" class="tweet-inline-link">${richTextHtml(child)}</a>`;
+          const rawHref = child.getAttribute('href') || '#';
+          const inner = richTextHtml(child);
+          if (rawHref.startsWith('/hashtag/')) {
+            const q = '#' + decodeURIComponent(rawHref.replace('/hashtag/', '').split('?')[0]);
+            out += `<a href="#" class="tweet-inline-link in-app-search" data-query="${escapeAttr(q)}">${inner}</a>`;
+          } else if (rawHref.includes('/search?q=')) {
+            let q = '';
+            try { q = decodeURIComponent(rawHref.split('/search?q=')[1].split('&')[0]); } catch (e) {}
+            out += `<a href="#" class="tweet-inline-link in-app-search" data-query="${escapeAttr(q)}">${inner}</a>`;
+          } else if (/^\/[A-Za-z0-9_]+$/.test(rawHref)) {
+            out += `<a href="#" class="tweet-inline-link in-app-user" data-user="${escapeAttr(rawHref.slice(1))}">${inner}</a>`;
+          } else if (rawHref.startsWith('/')) {
+            out += `<a href="https://x.com${rawHref}" target="_blank" class="tweet-inline-link">${inner}</a>`;
+          } else {
+            out += `<a href="${escapeAttr(rawHref)}" target="_blank" class="tweet-inline-link">${inner}</a>`;
+          }
         } else out += richTextHtml(child);
       }
     });
