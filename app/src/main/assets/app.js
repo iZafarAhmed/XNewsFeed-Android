@@ -321,7 +321,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  /* ✅ In-app hashtag / search results (Nitter search RSS) */
+    /* ✅ In-app search — scrapes Nitter's search page (search RSS is disabled on most instances) */
   async function openSearch(query) {
     if (!query) return;
     currentSearchQuery = query;
@@ -331,19 +331,84 @@ document.addEventListener('DOMContentLoaded', () => {
     channelChip.textContent = '🔍 ' + query;
     channelContainer.innerHTML = '<div class="loader">Searching ' + escapeHtml(query) + '…</div>';
     try {
-      const text = await smartFetch(`${NITTER_INSTANCE}/search/rss?f=search&q=${encodeURIComponent(query)}`);
-      const xml = new DOMParser().parseFromString(text, 'text/xml');
-      const items = xml.querySelectorAll('item');
+      const html = await smartFetch(`${NITTER_INSTANCE}/search?f=search&q=${encodeURIComponent(query)}`);
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const nodes = doc.querySelectorAll('.timeline-item');
       channelContainer.innerHTML = '';
-      if (!items.length) { channelContainer.innerHTML = '<p class="empty-state">No posts found for ' + escapeHtml(query) + '.</p>'; return; }
-      items.forEach(item => {
-        const creatorNode = item.getElementsByTagName('dc:creator')[0] || item.getElementsByTagName('creator')[0];
-        const handle = (creatorNode ? creatorNode.textContent : '').replace('@', '').trim() || 'unknown';
-        channelContainer.appendChild(buildTweetCard(item, { username: handle }));
+      nodes.forEach(node => {
+        const card = buildSearchCard(node);
+        if (card) channelContainer.appendChild(card);
       });
+      if (!channelContainer.children.length) {
+        channelContainer.innerHTML = '<p class="empty-state">No posts found for ' + escapeHtml(query) + '.</p>';
+      }
     } catch (e) {
       channelContainer.innerHTML = '<div class="error">Couldn\'t load results for ' + escapeHtml(query) + '.</div>';
     }
+  }
+
+  function buildSearchCard(node) {
+    const statusHref = (node.querySelector('a.tweet-link') || node.querySelector('a[href*="/status/"]'))?.getAttribute('href') || '';
+    const mId = statusHref.match(/status\/(\d+)/);
+    const tweetId = mId ? mId[1] : '';
+    let username = (node.querySelector('.username')?.textContent || '').replace('@', '').trim();
+    if (!username && statusHref) username = statusHref.split('/')[1] || 'unknown';
+    if (!username) return null;
+    const creator = '@' + username;
+
+    const contentEl = node.querySelector('.tweet-content');
+    const text = contentEl ? contentEl.textContent.trim() : '';
+    if (!text && !tweetId) return null;
+
+    const dateEl = node.querySelector('.tweet-date');
+    const dateTitle = dateEl?.getAttribute('title') || dateEl?.textContent || '';
+
+    let isVideo = !!node.querySelector('video, .gallery-video, .video-container');
+    let imgSrc = '';
+    const imgs = node.querySelectorAll('.attachments img');
+    if (imgs.length) imgSrc = imgs[0].getAttribute('src') || '';
+    if (imgSrc && imgSrc.startsWith('/')) imgSrc = NITTER_INSTANCE + imgSrc;
+
+    let avatarUrl = node.querySelector('.tweet-avatar')?.getAttribute('src') || '';
+    if (avatarUrl && avatarUrl.startsWith('/')) avatarUrl = NITTER_INSTANCE + avatarUrl;
+
+    const card = document.createElement('div');
+    card.className = 'tweet-card';
+    card.setAttribute('data-user', username);
+
+    const avatarHtml = avatarUrl ? `<img class="avatar" src="${escapeAttr(avatarUrl)}" alt="">` : fallbackAvatarHtml(creator);
+
+    let mediaHtml = '';
+    if (imgSrc) {
+      mediaHtml = isVideo
+        ? `<div class="media-container" data-tweet-id="${tweetId}" data-username="${username}">
+             <img src="${imgSrc}" class="tweet-image" alt="Video thumbnail">
+             <div class="play-btn-overlay">▶ Play Video</div>
+           </div>`
+        : `<img src="${imgSrc}" class="tweet-image" alt="Tweet image">`;
+    }
+
+    const xUrl = tweetId ? `https://x.com/${username}/status/${tweetId}` : '#';
+
+    card.innerHTML = `
+      <div class="tweet-header">
+        <div class="tweet-user">${avatarHtml}<strong>${escapeHtml(creator)}</strong></div>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <button class="translate-btn" title="Translate to English">🌐</button>
+          <span class="tweet-date" title="${escapeAttr(dateTitle)}">${escapeHtml(dateTitle)}</span>
+        </div>
+      </div>
+      <div class="tweet-content"><p class="tweet-paragraph">${linkify(escapeHtml(text))}</p></div>
+      ${mediaHtml}
+      <a href="${xUrl}" target="_blank" class="tweet-link">View on X (Twitter) ↗</a>`;
+
+    const av = card.querySelector('img.avatar');
+    if (av) av.addEventListener('error', () => { av.outerHTML = fallbackAvatarHtml(creator); });
+    card.querySelector('.tweet-user').addEventListener('click', () => openChannel(username));
+    if (isVideo) {
+      card.querySelector('.media-container')?.addEventListener('click', function () { handleVideoPlayback(this); });
+    }
+    return card;
   }
 
   // ✅ Updated: added crypto and business detection
@@ -450,7 +515,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const pTags = descDiv.querySelectorAll('p');
     const contentHtml = pTags.length
       ? Array.from(pTags).map(p => `<p class="tweet-paragraph">${richTextHtml(p)}</p>`).join('')
-      : `<p class="tweet-paragraph">${escapeHtml(title)}</p>`;
+      : `<p class="tweet-paragraph">${linkify(escapeHtml(title))}</p>`;
 
     const avatarHtml = avatarUrl
       ? `<img class="avatar" src="${escapeAttr(avatarUrl)}" alt="">`
@@ -494,10 +559,20 @@ document.addEventListener('DOMContentLoaded', () => {
     return card;
   }
 
+    // ✅ Auto-linkify plain-text #hashtags & @mentions (RSS sends them as plain text)
+  function linkify(escapedText) {
+    return escapedText.replace(/[#@][A-Za-z0-9_]+/g, (m) => {
+      if (m.startsWith('#')) {
+        return `<a href="#" class="tweet-inline-link in-app-search" data-query="${escapeAttr(m)}">${m}</a>`;
+      }
+      return `<a href="#" class="tweet-inline-link in-app-user" data-user="${escapeAttr(m.slice(1))}">${m}</a>`;
+    });
+  }
+
   function richTextHtml(node) {
     let out = '';
     node.childNodes.forEach(child => {
-      if (child.nodeType === Node.TEXT_NODE) out += escapeHtml(child.textContent);
+      if (child.nodeType === Node.TEXT_NODE) out += linkify(escapeHtml(child.textContent));
       else if (child.nodeType === Node.ELEMENT_NODE) {
         const tag = child.tagName.toLowerCase();
         if (tag === 'br') out += '<br>';
