@@ -37,7 +37,7 @@ public class MainActivity extends Activity {
         webView.getSettings().setAllowFileAccess(true);
         webView.getSettings().setMediaPlaybackRequiresUserGesture(false);
 
-        // ✅ WebView-level proxy: requests through Chromium's real network stack
+        // ✅ WebView-level proxy: requests travel through Chromium's real network stack
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
@@ -54,16 +54,18 @@ public class MainActivity extends Activity {
                         c.setInstanceFollowRedirects(true);
 
                         InputStream is = c.getInputStream();
-                        if ("gzip".equalsIgnoreCase(c.getContentEncoding())) is = new GZIPInputStream(is);
+                        if ("gzip".equalsIgnoreCase(c.getContentEncoding())) {
+                            is = new GZIPInputStream(is);
+                        }
 
                         Map<String, String> headers = new HashMap<>();
                         headers.put("Access-Control-Allow-Origin", "*");
-                        String mime = url.contains("rss") ? "application/xml" : "text/html";
-                        return new WebResourceResponse(mime, "UTF-8",
-                                c.getResponseCode(), "OK", headers, is);
+                        String mime = target.contains("rss") ? "application/xml" : "text/html";
+                        return new WebResourceResponse(mime, "UTF-8", c.getResponseCode(), "OK", headers, is);
                     } catch (Exception e) {
-                        return new WebResourceResponse("text/plain", "UTF-8", 502, "Bad Gateway",
-                                null, new ByteArrayInputStream(String.valueOf(e.getMessage()).getBytes());
+                        String msg = String.valueOf(e.getMessage());
+                        ByteArrayInputStream errBody = new ByteArrayInputStream(msg.getBytes());
+                        return new WebResourceResponse("text/plain", "UTF-8", 502, "Bad Gateway", null, errBody);
                     }
                 }
                 return super.shouldInterceptRequest(view, request);
@@ -77,8 +79,11 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (webView.canGoBack()) webView.goBack();
-        else super.onBackPressed();
+        if (webView.canGoBack()) {
+            webView.goBack();
+        } else {
+            super.onBackPressed();
+        }
     }
 
     // Kept as fallback
@@ -95,13 +100,19 @@ public class MainActivity extends Activity {
                     c.setConnectTimeout(15000);
                     c.setReadTimeout(20000);
                     c.setInstanceFollowRedirects(true);
+
                     InputStream is = c.getInputStream();
-                    if ("gzip".equalsIgnoreCase(c.getContentEncoding())) is = new GZIPInputStream(is);
+                    if ("gzip".equalsIgnoreCase(c.getContentEncoding())) {
+                        is = new GZIPInputStream(is);
+                    }
                     StringBuilder sb = new StringBuilder();
                     try (BufferedReader r = new BufferedReader(new InputStreamReader(is, "UTF-8"))) {
                         String line;
-                        while ((line = r.readLine()) != null) sb.append(line).append('\n');
+                        while ((line = r.readLine()) != null) {
+                            sb.append(line).append('\n');
+                        }
                     }
+
                     JSONObject res = new JSONObject();
                     res.put("ok", true);
                     res.put("body", sb.toString());
@@ -113,9 +124,10 @@ public class MainActivity extends Activity {
                         res.put("error", e.getMessage() != null ? e.getMessage() : "Unknown error");
                         payload = JSONObject.quote(res.toString());
                     } catch (Exception jsonEx) {
-                        payload = "\"{\\\"ok\\\":false,\\\"error\\\":\\\"JSON creation failed\\\"}\"";
+                        payload = "\"{\\\"ok\\\":false,\\\"error\\\":\\\"Unknown error\\\"}\"";
                     }
                 }
+
                 final String finalPayload = payload;
                 webView.post(() -> webView.evaluateJavascript(
                         "window.__onFetch && window.__onFetch(" + JSONObject.quote(id) + ", " + finalPayload + ")", null));
