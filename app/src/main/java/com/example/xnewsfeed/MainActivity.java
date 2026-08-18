@@ -10,9 +10,11 @@ import android.webkit.WebViewClient;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.zip.GZIPInputStream;
 
 public class MainActivity extends Activity {
     private WebView webView;
@@ -45,27 +47,30 @@ public class MainActivity extends Activity {
                 String payload;
                 try {
                     HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-                    
-                    // FIX: Add real browser headers so Twitter/Nitter doesn't block the request
                     c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
-                    c.setRequestProperty("Accept", "*/*");
+                    c.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+                    c.setRequestProperty("Accept-Encoding", "gzip");
                     c.setRequestProperty("Referer", "https://nitter.net/");
-                    
                     c.setConnectTimeout(15000);
                     c.setReadTimeout(20000);
-                    c.setInstanceFollowRedirects(true); // Ensure we follow 302 redirects
-                    
+                    c.setInstanceFollowRedirects(true);
+
+                    // ✅ Handle gzip responses + force UTF-8 (emojis, Arabic, Turkish…)
+                    InputStream is = c.getInputStream();
+                    if ("gzip".equalsIgnoreCase(c.getContentEncoding())) {
+                        is = new GZIPInputStream(is);
+                    }
                     StringBuilder sb = new StringBuilder();
-                    try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream()))) {
+                    try (BufferedReader r = new BufferedReader(new InputStreamReader(is, "UTF-8"))) {
                         String line;
                         while ((line = r.readLine()) != null) sb.append(line).append('\n');
                     }
-                    
+
                     JSONObject res = new JSONObject();
                     res.put("ok", true);
                     res.put("body", sb.toString());
                     payload = JSONObject.quote(res.toString());
-                    
+
                 } catch (Exception e) {
                     try {
                         JSONObject res = new JSONObject();
@@ -76,7 +81,7 @@ public class MainActivity extends Activity {
                         payload = "\"{\\\"ok\\\":false,\\\"error\\\":\\\"JSON creation failed\\\"}\"";
                     }
                 }
-                
+
                 final String finalPayload = payload;
                 webView.post(() -> webView.evaluateJavascript(
                         "window.__onFetch && window.__onFetch(" + JSONObject.quote(id) + ", " + finalPayload + ")", null));
