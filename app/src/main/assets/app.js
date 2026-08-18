@@ -504,18 +504,35 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (tag === 'a') {
           const rawHref = child.getAttribute('href') || '#';
           const inner = richTextHtml(child);
-          if (rawHref.startsWith('/hashtag/')) {
-            const q = '#' + decodeURIComponent(rawHref.replace('/hashtag/', '').split('?')[0]);
-            out += `<a href="#" class="tweet-inline-link in-app-search" data-query="${escapeAttr(q)}">${inner}</a>`;
-          } else if (rawHref.includes('/search?q=')) {
-            let q = '';
-            try { q = decodeURIComponent(rawHref.split('/search?q=')[1].split('&')[0]); } catch (e) {}
-            out += `<a href="#" class="tweet-inline-link in-app-search" data-query="${escapeAttr(q)}">${inner}</a>`;
-          } else if (/^\/[A-Za-z0-9_]+$/.test(rawHref)) {
-            out += `<a href="#" class="tweet-inline-link in-app-user" data-user="${escapeAttr(rawHref.slice(1))}">${inner}</a>`;
-          } else if (rawHref.startsWith('/')) {
-            out += `<a href="https://x.com${rawHref}" target="_blank" class="tweet-inline-link">${inner}</a>`;
+
+          // ✅ FIX: normalize relative AND absolute Nitter URLs to an internal path
+          let path = null;
+          if (rawHref.startsWith('/')) {
+            path = rawHref;
           } else {
+            try {
+              const u = new URL(rawHref);
+              const niHost = new URL(NITTER_INSTANCE).host;
+              if (u.host === niHost || u.host.endsWith('.' + niHost)) path = u.pathname + u.search;
+            } catch (e) {}
+          }
+
+          if (path && path.includes('/search?q=')) {
+            // #hashtag / search → in-app results
+            let q = '';
+            try { q = decodeURIComponent(path.split('/search?q=')[1].split('&')[0]); } catch (e) {}
+            out += `<a href="#" class="tweet-inline-link in-app-search" data-query="${escapeAttr(q)}">${inner}</a>`;
+          } else if (path && path.startsWith('/hashtag/')) {
+            const q = '#' + decodeURIComponent(path.replace('/hashtag/', '').split('?')[0]);
+            out += `<a href="#" class="tweet-inline-link in-app-search" data-query="${escapeAttr(q)}">${inner}</a>`;
+          } else if (path && /^\/[A-Za-z0-9_]+\/?$/.test(path)) {
+            // @mention / profile → in-app channel view
+            out += `<a href="#" class="tweet-inline-link in-app-user" data-user="${escapeAttr(path.replace(/\//g, ''))}">${inner}</a>`;
+          } else if (path) {
+            // any other internal link (e.g. status) → original X post
+            out += `<a href="https://x.com${path.split('?')[0]}" target="_blank" class="tweet-inline-link">${inner}</a>`;
+          } else {
+            // true external links (articles etc.) stay external
             out += `<a href="${escapeAttr(rawHref)}" target="_blank" class="tweet-inline-link">${inner}</a>`;
           }
         } else out += richTextHtml(child);
