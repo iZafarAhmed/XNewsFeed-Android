@@ -42,7 +42,15 @@ function nativeFetch(url) {
 }
 
 async function smartFetch(url) {
-  if (window.Android) return nativeFetch(url);
+  if (window.Android) {
+    // 1) ✅ WebView proxy — real Chromium network stack (beats anti-bot blocks)
+    try {
+      const res = await fetch('https://proxy.xnewsfeed.local/' + encodeURIComponent(url));
+      if (res.ok) return await res.text();
+    } catch (e) {}
+    // 2) Fallback: Java bridge
+    return nativeFetch(url);
+  }
   const res = await fetch(url);
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.text();
