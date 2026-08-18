@@ -330,7 +330,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
     /* ✅ In-app search — scrapes Nitter's search page (search RSS is disabled on most instances) */
-    async function openSearch(query) {
+     async function openSearch(query) {
     if (!query) return;
     currentSearchQuery = query;
     channelMode = 'search';
@@ -339,34 +339,77 @@ document.addEventListener('DOMContentLoaded', () => {
     channelChip.textContent = '🔍 ' + query;
     channelContainer.innerHTML = '<div class="loader">Searching ' + escapeHtml(query) + '…</div>';
 
-    const urls = [
-      `${NITTER_INSTANCE}/search?f=tweets&q=${encodeURIComponent(query)}`,
-      `${NITTER_INSTANCE}/search?f=live&q=${encodeURIComponent(query)}`,
-      `${NITTER_INSTANCE}/search?q=${encodeURIComponent(query)}`
+    const INSTANCES = [
+      NITTER_INSTANCE,
+      'https://xcancel.com',
+      'https://nitter.poast.org',
+      'https://nitter.privacydev.net',
+      'https://nitter.tedomum.net'
     ];
+    const q = encodeURIComponent(query);
 
-    let nodes = [];
-    let lastHtml = '';
-    for (const u of urls) {
+    let fragments = [];   // HTML tweet blocks
+    let rssItems = [];    // RSS <item> nodes
+    let lastRaw = '';
+
+    // 1) Hidden real-Chromium WebView on your main instance
+    if (window.Android) {
       try {
-        lastHtml = await smartFetch(u);
-        const doc = new DOMParser().parseFromString(lastHtml, 'text/html');
-        nodes = doc.querySelectorAll('.timeline-item');
-        if (!nodes.length) nodes = doc.querySelectorAll('.tweet-body');
-        if (!nodes.length) nodes = doc.querySelectorAll('div[class*="timeline"]');
-        if (nodes.length) break;
-      } catch (e) { lastHtml = 'FETCH ERROR: ' + e.message; }
+        const raw = await nativeFetchPage(`${NITTER_INSTANCE}/search?f=tweets&q=${q}`);
+        lastRaw = raw || '';
+        fragments = lastRaw.split('\u0001').filter(Boolean);
+      } catch (e) {}
     }
 
+    // 2) Search RSS across instances (same proven plumbing as Trending)
+    if (!fragments.length) {
+      for (const inst of INSTANCES) {
+        try {
+          const xmlText = await smartFetch(`${inst}/search/rss?f=tweets&q=${q}`);
+          lastRaw = xmlText;
+          const xml = new DOMParser().parseFromString(xmlText, 'text/xml');
+          const items = xml.querySelectorAll('item');
+          if (items.length) { rssItems = Array.from(items); break; }
+        } catch (e) { lastRaw = 'ERR: ' + e.message; }
+      }
+    }
+
+    // 3) HTML scrape across instances
+    if (!fragments.length && !rssItems.length) {
+      for (const inst of INSTANCES) {
+        try {
+          const html = await smartFetch(`${inst}/search?f=tweets&q=${q}`);
+          lastRaw = html;
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          let nodes = doc.querySelectorAll('.timeline-item');
+          if (!nodes.length) nodes = doc.querySelectorAll('.tweet-body');
+          if (nodes.length) { fragments = Array.from(nodes).map(n => n.outerHTML); break; }
+        } catch (e) {}
+      }
+    }
+
+    // ---- Render ----
     channelContainer.innerHTML = '';
-    nodes.forEach(node => {
-      const card = buildSearchCard(node);
-      if (card) channelContainer.appendChild(card);
-    });
+
+    if (rssItems.length) {
+      rssItems.forEach(item => {
+        const creatorNode = item.getElementsByTagName('dc:creator')[0] || item.getElementsByTagName('creator')[0];
+        const handle = (creatorNode ? creatorNode.textContent : '').replace('@', '').trim() || 'unknown';
+        channelContainer.appendChild(buildTweetCard(item, { username: handle }));
+      });
+    } else if (fragments.length) {
+      fragments.forEach(frag => {
+        const doc = new DOMParser().parseFromString(frag, 'text/html');
+        const node = doc.body ? doc.body.firstElementChild : null;
+        if (node) {
+          const card = buildSearchCard(node);
+          if (card) channelContainer.appendChild(card);
+        }
+      });
+    }
 
     if (!channelContainer.children.length) {
-      // 🔍 DEBUG: show what the server actually returned (strip tags, first 300 chars)
-      const snippet = (lastHtml || 'no response').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+      const snippet = (lastRaw || 'no response').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
       channelContainer.innerHTML =
         '<p class="empty-state">No posts found for ' + escapeHtml(query) + '.</p>' +
         '<div class="error" style="text-align:left; font-size:11px; word-break:break-all;">DEBUG → ' + escapeHtml(snippet) + '</div>';
