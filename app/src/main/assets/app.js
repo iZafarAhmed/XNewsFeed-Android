@@ -330,10 +330,26 @@ document.addEventListener('DOMContentLoaded', () => {
     switchView('channel');
     channelChip.textContent = '🔍 ' + query;
     channelContainer.innerHTML = '<div class="loader">Searching ' + escapeHtml(query) + '…</div>';
+
     try {
-      const html = await smartFetch(`${NITTER_INSTANCE}/search?f=search&q=${encodeURIComponent(query)}`);
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-      const nodes = doc.querySelectorAll('.timeline-item');
+      // ✅ f=tweets is the working search tab (verified); fall back to other tabs if empty
+      const urls = [
+        `${NITTER_INSTANCE}/search?f=tweets&q=${encodeURIComponent(query)}`,
+        `${NITTER_INSTANCE}/search?f=live&q=${encodeURIComponent(query)}`,
+        `${NITTER_INSTANCE}/search?q=${encodeURIComponent(query)}`
+      ];
+
+      let nodes = [];
+      for (const u of urls) {
+        try {
+          const html = await smartFetch(u);
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          nodes = doc.querySelectorAll('.timeline-item');
+          if (!nodes.length) nodes = doc.querySelectorAll('.tweet-body');
+          if (nodes.length) break;
+        } catch (e) {}
+      }
+
       channelContainer.innerHTML = '';
       nodes.forEach(node => {
         const card = buildSearchCard(node);
