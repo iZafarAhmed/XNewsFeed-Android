@@ -46,8 +46,9 @@ public class MainActivity extends Activity {
                     try {
                         String target = URLDecoder.decode(url.substring(PROXY_BASE.length()), "UTF-8");
                         HttpURLConnection c = (HttpURLConnection) new URL(target).openConnection();
-                        c.setRequestProperty("User-Agent", UA);
-                        c.setRequestProperty("Accept", "*/*");
+                        boolean isRss = target.contains("/rss");
+                        c.setRequestProperty("User-Agent", isRss ? "XNewsFeed/1.0 (RSS reader)" : UA);
+                        c.setRequestProperty("Accept", isRss ? "application/rss+xml, application/xml, text/xml, */*" : "*/*");
                         c.setRequestProperty("Accept-Encoding", "gzip");
                         c.setConnectTimeout(15000);
                         c.setReadTimeout(20000);
@@ -94,8 +95,9 @@ public class MainActivity extends Activity {
                 String payload;
                 try {
                     HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-                    c.setRequestProperty("User-Agent", UA);
-                    c.setRequestProperty("Accept", "*/*");
+                    boolean isRss = url.contains("/rss");
+                    c.setRequestProperty("User-Agent", isRss ? "XNewsFeed/1.0 (RSS reader)" : UA);
+                    c.setRequestProperty("Accept", isRss ? "application/rss+xml, application/xml, text/xml, */*" : "*/*");
                     c.setRequestProperty("Accept-Encoding", "gzip");
                     c.setConnectTimeout(15000);
                     c.setReadTimeout(20000);
