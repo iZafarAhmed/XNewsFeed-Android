@@ -75,7 +75,27 @@ document.addEventListener('DOMContentLoaded', () => {
   const viewTrends = document.getElementById('view-trends');
   const viewChannel = document.getElementById('view-channel');
 
-  const NITTER_INSTANCE = 'https://nitter.net';
+  let NITTER_INSTANCE = 'https://xcancel.com';
+  const INSTANCE_LIST = [
+    'https://xcancel.com',
+    'https://nitter.poast.org',
+    'https://nitter.unixfox.eu',
+    'https://nitter.tedomum.net',
+    'https://nitter.net'
+  ];
+
+  // ✅ Auto-detect a working Nitter instance (RSS alive + reachable)
+  async function probeInstance() {
+    for (const inst of INSTANCE_LIST) {
+      try {
+        const text = await smartFetch(inst + '/MiddleEastEye/rss');
+        if (text && text.includes('<rss')) {
+          NITTER_INSTANCE = inst;
+          return;
+        }
+      } catch (e) {}
+    }
+  }
 
   // ✅ Updated: added crypto and business
   const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻', crypto: '🪙', business: '💼', science: '🔬', world: '🌐' };
@@ -251,7 +271,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === lastTab));
   }
 
-  refreshBtn.addEventListener('click', () => {
+  refreshBtn.addEventListener('click', async () => {
+    await probeInstance();   // re-check instance health on every refresh
     if (currentView === 'feed') reloadFeeds();
     else if (currentView === 'trends') loadTrends();
     else if (currentView === 'channel') (channelMode === 'search' ? openSearch(currentSearchQuery) : openChannel(currentChannelUser));
@@ -339,13 +360,7 @@ document.addEventListener('DOMContentLoaded', () => {
     channelChip.textContent = '🔍 ' + query;
     channelContainer.innerHTML = '<div class="loader">Searching ' + escapeHtml(query) + '…</div>';
 
-    const INSTANCES = [
-      NITTER_INSTANCE,
-      'https://xcancel.com',
-      'https://nitter.poast.org',
-      'https://nitter.privacydev.net',
-      'https://nitter.tedomum.net'
-    ];
+    const INSTANCES = [NITTER_INSTANCE, ...INSTANCE_LIST.filter(i => i !== NITTER_INSTANCE)];
     const q = encodeURIComponent(query);
 
     let fragments = [];   // HTML tweet blocks
@@ -847,7 +862,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ✅ App now opens directly on Trending (World News)
-  switchView('trends');
-  trendsLoaded = true;
-  loadTrends();
-});
+  probeInstance().finally(() => {
+    switchView('trends');
+    trendsLoaded = true;
+    loadTrends();
+  });
