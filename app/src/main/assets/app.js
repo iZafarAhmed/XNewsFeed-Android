@@ -41,6 +41,14 @@ window.__onFetch = function (id, jsonStr) {
   } catch (e) { cb.reject(e); }
 };
 
+function nativeFetchUA(url, ua) {
+  return new Promise((resolve, reject) => {
+    const id = 'f' + (++_cbId);
+    _cbs[id] = { resolve, reject };
+    window.Android.fetchUA(url, id, ua);
+  });
+}
+
 function nativeFetch(url) {
   return new Promise((resolve, reject) => {
     const id = 'f' + (++_cbId);
@@ -78,6 +86,12 @@ async function smartFetch(url) {
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.text();
 }
+async function rssFetch(url) {
+  if (window.Android) return withTimeout(nativeFetchUA(url, RSS_UA), 12000);
+  const res = await withTimeout(fetch(url), 12000);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.text();
+}
 
 /* ========== APP ========== */
 document.addEventListener('DOMContentLoaded', () => {
@@ -100,6 +114,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let NITTER_INSTANCE = 'https://xcancel.com';        // HTML pages (status / search)
   let RSS_INSTANCE = 'https://rss.xcancel.com';       // RSS feeds (xcancel moved RSS here)
+    const UA_LIST = [
+    'Feeder/2.9.11 (Android)',
+    'Feedly/1.0',
+    'NetNewsWire/6.1.4 (Mac OS X; en_US)',
+    'Tiny Tiny RSS/24.02 (http://tt-rss.org/)',
+    'Miniflux/2.1.3',
+    'Inoreader/1.0.0 (+http://www.inoreader.com)'
+  ];
+  let RSS_UA = UA_LIST[0];
   const INSTANCE_LIST = [
     { web: 'https://xcancel.com', rss: 'https://rss.xcancel.com' },
     { web: 'https://nitter.privacyredirect.com', rss: 'https://nitter.privacyredirect.com' },
@@ -124,11 +147,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /* ---------- Instance failover ---------- */
   async function probeInstance() {
+    // 1) xcancel RSS — discover which reader identity is whitelisted
+    for (const ua of UA_LIST) {
+      try {
+        const text = window.Android
+          ? await withTimeout(nativeFetchUA('https://rss.xcancel.com/MiddleEastEye/rss', ua), 6000)
+          : await (await withTimeout(fetch('https://rss.xcancel.com/MiddleEastEye/rss'), 6000)).text();
+        if (text && text.includes('<rss')) {
+          NITTER_INSTANCE = 'https://xcancel.com';
+          RSS_INSTANCE = 'https://rss.xcancel.com';
+          RSS_UA = ua;
+          return;
+        }
+      } catch (e) {}
+    }
+    // 2) other instances
     for (const entry of INSTANCE_LIST) {
       try {
         const text = window.Android
-          ? await withTimeout(nativeFetch(entry.rss + '/MiddleEastEye/rss'), 8000)
-          : await (await withTimeout(fetch(entry.rss + '/MiddleEastEye/rss'), 8000)).text();
+          ? await withTimeout(nativeFetchUA(entry.rss + '/MiddleEastEye/rss', RSS_UA), 6000)
+          : await (await withTimeout(fetch(entry.rss + '/MiddleEastEye/rss'), 6000)).text();
         if (text && text.includes('<rss')) {
           NITTER_INSTANCE = entry.web;
           RSS_INSTANCE = entry.rss;
@@ -262,7 +300,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function fetchFeed(username, container) {
     container.querySelectorAll(`.tweet-card[data-user="${username}"]`).forEach(el => el.remove());
     try {
-      const text = await smartFetch(`${RSS_INSTANCE}/${username}/rss`);
+      const text = await rssFetch(`${RSS_INSTANCE}/${username}/rss`);
       const xml = new DOMParser().parseFromString(text, 'text/xml');
       const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
       xml.querySelectorAll('item').forEach(item => {
@@ -287,7 +325,7 @@ document.addEventListener('DOMContentLoaded', () => {
     channelChip.textContent = '@' + handle;
     channelContainer.innerHTML = '<div class="loader">Loading @' + escapeHtml(handle) + '…</div>';
     try {
-      const text = await smartFetch(`${RSS_INSTANCE}/${handle}/rss`);
+      const text = await rssFetch(`${RSS_INSTANCE}/${handle}/rss`);
       const xml = new DOMParser().parseFromString(text, 'text/xml');
       const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
       const items = xml.querySelectorAll('item');
@@ -484,7 +522,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     await Promise.all(channels.map(async ch => {
       try {
-        const text = await smartFetch(`${RSS_INSTANCE}/${ch.handle}/rss`);
+        const text = await rssFetch(`${RSS_INSTANCE}/${ch.handle}/rss`);
         if (!debugRaw) debugRaw = text;
         const xml = new DOMParser().parseFromString(text, 'text/xml');
         if (!xml.querySelector('parsererror')) {
