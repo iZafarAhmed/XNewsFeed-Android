@@ -94,13 +94,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const viewTrends = document.getElementById('view-trends');
   const viewChannel = document.getElementById('view-channel');
 
-  let NITTER_INSTANCE = 'https://xcancel.com';
+  let NITTER_INSTANCE = 'https://xcancel.com';        // HTML pages (status / search)
+  let RSS_INSTANCE = 'https://rss.xcancel.com';       // RSS feeds (xcancel moved RSS here)
   const INSTANCE_LIST = [
-    'https://xcancel.com',
-    'https://nitter.poast.org',
-    'https://nitter.unixfox.eu',
-    'https://nitter.tedomum.net',
-    'https://nitter.net'
+    { web: 'https://xcancel.com', rss: 'https://rss.xcancel.com' },
+    { web: 'https://nitter.privacyredirect.com', rss: 'https://nitter.privacyredirect.com' },
+    { web: 'https://nitter.net', rss: 'https://nitter.net' },
+    { web: 'https://nitter.poast.org', rss: 'https://nitter.poast.org' }
   ];
 
   const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻', crypto: '🪙', business: '💼', science: '🔬', world: '🌐' };
@@ -120,12 +120,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /* ---------- Instance failover ---------- */
   async function probeInstance() {
-    for (const inst of INSTANCE_LIST) {
+    for (const entry of INSTANCE_LIST) {
       try {
         const text = window.Android
-          ? await withTimeout(nativeFetch(inst + '/MiddleEastEye/rss'), 8000)
-          : await (await withTimeout(fetch(inst + '/MiddleEastEye/rss'), 8000)).text();
-        if (text && text.includes('<rss')) { NITTER_INSTANCE = inst; return; }
+          ? await withTimeout(nativeFetch(entry.rss + '/MiddleEastEye/rss'), 8000)
+          : await (await withTimeout(fetch(entry.rss + '/MiddleEastEye/rss'), 8000)).text();
+        if (text && text.includes('<rss')) {
+          NITTER_INSTANCE = entry.web;
+          RSS_INSTANCE = entry.rss;
+          return;
+        }
       } catch (e) {}
     }
   }
@@ -254,7 +258,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function fetchFeed(username, container) {
     container.querySelectorAll(`.tweet-card[data-user="${username}"]`).forEach(el => el.remove());
     try {
-      const text = await smartFetch(`${NITTER_INSTANCE}/${username}/rss`);
+      const text = await smartFetch(`${RSS_INSTANCE}/${username}/rss`);
       const xml = new DOMParser().parseFromString(text, 'text/xml');
       const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
       xml.querySelectorAll('item').forEach(item => {
@@ -279,7 +283,7 @@ document.addEventListener('DOMContentLoaded', () => {
     channelChip.textContent = '@' + handle;
     channelContainer.innerHTML = '<div class="loader">Loading @' + escapeHtml(handle) + '…</div>';
     try {
-      const text = await smartFetch(`${NITTER_INSTANCE}/${handle}/rss`);
+      const text = await smartFetch(`${RSS_INSTANCE}/${handle}/rss`);
       const xml = new DOMParser().parseFromString(text, 'text/xml');
       const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
       const items = xml.querySelectorAll('item');
@@ -301,7 +305,7 @@ document.addEventListener('DOMContentLoaded', () => {
     channelChip.textContent = '🔍 ' + query;
     channelContainer.innerHTML = '<div class="loader">Searching ' + escapeHtml(query) + '…</div>';
 
-    const INSTANCES = [NITTER_INSTANCE, ...INSTANCE_LIST.filter(i => i !== NITTER_INSTANCE)];
+    const INSTANCES = [NITTER_INSTANCE, ...INSTANCE_LIST.map(i => i.web).filter(w => w !== NITTER_INSTANCE)];
     const q = encodeURIComponent(query);
     let fragments = [];
     let rssItems = [];
@@ -475,7 +479,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     await Promise.all(channels.map(async ch => {
       try {
-        const text = await smartFetch(`${NITTER_INSTANCE}/${ch.handle}/rss`);
+        const text = await smartFetch(`${RSS_INSTANCE}/${ch.handle}/rss`);
         const xml = new DOMParser().parseFromString(text, 'text/xml');
         if (!xml.querySelector('parsererror')) {
           const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
