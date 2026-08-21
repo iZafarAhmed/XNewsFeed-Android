@@ -47,7 +47,7 @@ public class MainActivity extends Activity {
                         String target = URLDecoder.decode(url.substring(PROXY_BASE.length()), "UTF-8");
                         HttpURLConnection c = (HttpURLConnection) new URL(target).openConnection();
                         c.setRequestProperty("User-Agent", UA);
-                        c.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+                        c.setRequestProperty("Accept", "*/*");
                         c.setRequestProperty("Accept-Encoding", "gzip");
                         c.setConnectTimeout(15000);
                         c.setReadTimeout(20000);
