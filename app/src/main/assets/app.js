@@ -66,7 +66,11 @@ async function smartFetch(url) {
   if (window.Android) {
     try {
       const res = await withTimeout(fetch('https://proxy.xnewsfeed.local/' + encodeURIComponent(url)), 12000);
-      if (res.ok) return await res.text();
+      if (res.ok) {
+        const text = await res.text();
+        // If the server answered with the "RSS client" notice page, retry via the bridge
+        if (!(url.includes('/rss') && text.includes('RSS client'))) return text;
+      }
     } catch (e) {}
     return withTimeout(nativeFetch(url), 12000);
   }
@@ -476,10 +480,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const collected = [];
     let done = 0;
+    let debugRaw = '';
 
     await Promise.all(channels.map(async ch => {
       try {
         const text = await smartFetch(`${RSS_INSTANCE}/${ch.handle}/rss`);
+        if (!debugRaw) debugRaw = text;
         const xml = new DOMParser().parseFromString(text, 'text/xml');
         if (!xml.querySelector('parsererror')) {
           const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
@@ -499,9 +505,11 @@ document.addEventListener('DOMContentLoaded', () => {
       new Date(a.item.querySelector('pubDate')?.textContent || 0));
 
     if (!collected.length) {
+      const snippet = (debugRaw || 'no data').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
       const err = document.createElement('div');
       err.className = 'error';
-      err.textContent = 'Couldn\'t fetch any channel in this category. Nitter might be down.';
+      err.style.cssText = 'text-align:left; font-size:11px; word-break:break-all;';
+      err.textContent = 'Couldn\'t fetch any channel. DEBUG → ' + snippet;
       trendContainer.appendChild(err);
       return;
     }
