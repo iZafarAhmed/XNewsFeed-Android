@@ -104,8 +104,9 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             payload = "\"{\\\"ok\\\":false,\\\"error\\\":\\\"parse error\\\"}\"";
         }
+        final String finalPayload = payload;
         webView.post(() -> webView.evaluateJavascript(
-                "window.__onFetch && window.__onFetch(" + JSONObject.quote(id) + ", " + payload + ")", null));
+                "window.__onFetch && window.__onFetch(" + JSONObject.quote(id) + ", " + finalPayload + ")", null));
     }
 
     private void doFetch(final String url, final String id, final String customUa) {
@@ -157,7 +158,6 @@ public class MainActivity extends Activity {
             doFetch(url, id, null);
         }
 
-        // ✅ NEW: fetch with a chosen RSS-reader identity
         @JavascriptInterface
         public void fetchUA(final String url, final String id, final String ua) {
             doFetch(url, id, ua);
