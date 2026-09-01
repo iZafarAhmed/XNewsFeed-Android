@@ -124,9 +124,10 @@ document.addEventListener('DOMContentLoaded', () => {
   ];
   let RSS_UA = UA_LIST[0];
   const INSTANCE_LIST = [
-    { web: 'https://nitter.kareem.one', rss: 'https://nitter.kareem.one' },
     { web: 'https://xcancel.com', rss: 'https://rss.xcancel.com' },
-    { web: 'https://nitter.privacyredirect.com', rss: 'https://nitter.privacyredirect.com' }
+    { web: 'https://nitter.privacyredirect.com', rss: 'https://nitter.privacyredirect.com' },
+    { web: 'https://nitter.net', rss: 'https://nitter.net' },
+    { web: 'https://nitter.poast.org', rss: 'https://nitter.poast.org' }
   ];
 
   const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻', crypto: '🪙', business: '💼', science: '🔬', world: '🌐' };
@@ -145,21 +146,23 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentSearchQuery = '';
 
   /* ---------- Instance failover ---------- */
+   let RSS_OK = false;
+
   async function probeInstance() {
-    // Test HTML path first (RSS disabled on most instances now)
-    if (window.Android) {
-      for (const entry of INSTANCE_LIST) {
-        try {
-          const frags = (await withTimeout(nativeFetchPage(entry.web + '/MiddleEastEye'), 20000)).split('\u0001').filter(Boolean);
-          if (frags.length > 0) {
-            NITTER_INSTANCE = entry.web;
-            RSS_INSTANCE = entry.rss;
-            return;
-          }
-        } catch (e) {}
-      }
+    for (const ua of UA_LIST) {
+      try {
+        const text = window.Android
+          ? await withTimeout(nativeFetchUA('https://rss.xcancel.com/MiddleEastEye/rss', ua), 6000)
+          : await (await withTimeout(fetch('https://rss.xcancel.com/MiddleEastEye/rss'), 6000)).text();
+        if (text && text.includes('<rss')) {
+          NITTER_INSTANCE = 'https://xcancel.com';
+          RSS_INSTANCE = 'https://rss.xcancel.com';
+          RSS_UA = ua;
+          RSS_OK = true;
+          return;
+        }
+      } catch (e) {}
     }
-    // RSS fallback (for future-proofing)
     for (const entry of INSTANCE_LIST) {
       try {
         const text = window.Android
@@ -168,22 +171,29 @@ document.addEventListener('DOMContentLoaded', () => {
         if (text && text.includes('<rss')) {
           NITTER_INSTANCE = entry.web;
           RSS_INSTANCE = entry.rss;
+          RSS_OK = true;
           return;
         }
       } catch (e) {}
     }
   }
-    // 2) other instances
-    for (const entry of INSTANCE_LIST) {
+
+  // ✅ NEW: healthy WEB instances (RSS disabled, but pages work) for the scrape engine
+  const WEB_LIST = [
+    'https://nitter.kareem.one',
+    'https://nitter.space',
+    'https://lightbrd.com',
+    'https://nitter.tiekoetter.com',
+    'https://nitter.catsarch.com',
+    'https://xcancel.com'
+  ];
+
+  async function probeWebInstance() {
+    if (!window.Android) return;
+    for (const inst of WEB_LIST) {
       try {
-        const text = window.Android
-          ? await withTimeout(nativeFetchUA(entry.rss + '/MiddleEastEye/rss', RSS_UA), 6000)
-          : await (await withTimeout(fetch(entry.rss + '/MiddleEastEye/rss'), 6000)).text();
-        if (text && text.includes('<rss')) {
-          NITTER_INSTANCE = entry.web;
-          RSS_INSTANCE = entry.rss;
-          return;
-        }
+        const frags = (await nativeFetchPage(inst + '/MiddleEastEye')).split('\u0001').filter(Boolean);
+        if (frags.length) { NITTER_INSTANCE = inst; return; }
       } catch (e) {}
     }
   }
@@ -269,6 +279,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   refreshBtn.addEventListener('click', async () => {
     await withTimeout(probeInstance(), 20000).catch(() => {});
+    if (!RSS_OK && window.Android) await withTimeout(probeWebInstance(), 45000).catch(() => {});
     if (currentView === 'feed') reloadFeeds();
     else if (currentView === 'trends') loadTrends();
     else if (currentView === 'channel') (channelMode === 'search' ? openSearch(currentSearchQuery) : openChannel(currentChannelUser));
@@ -311,33 +322,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function fetchFeed(username, container) {
     container.querySelectorAll(`.tweet-card[data-user="${username}"]`).forEach(el => el.remove());
-    let added = 0;
-
-    // 1) Primary: HTML-scrape via hidden real browser (works on kareem.one)
-    if (window.Android) {
-      try {
-        const frags = (await withTimeout(nativeFetchPage(`${NITTER_INSTANCE}/${username}`), 20000)).split('\u0001').filter(Boolean);
-        frags.forEach(f => {
-          const en = fragmentEntry(f);
-          if (en) { container.appendChild(en.card); added++; }
-        });
-      } catch (e) {}
-    }
-
-    // 2) Fallback: RSS (future-proofing)
-    if (!added) {
-      try {
-        const text = await rssFetch(`${RSS_INSTANCE}/${username}/rss`);
-        const xml = new DOMParser().parseFromString(text, 'text/xml');
-        const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
-        xml.querySelectorAll('item').forEach(item => {
-          container.appendChild(buildTweetCard(item, { username, avatarUrl: avatar }));
-          added++;
-        });
-      } catch (e) {}
-    }
-
-    if (!added) {
+    try {
+      const text = await rssFetch(`${RSS_INSTANCE}/${username}/rss`);
+      const xml = new DOMParser().parseFromString(text, 'text/xml');
+      const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
+      xml.querySelectorAll('item').forEach(item => {
+        container.appendChild(buildTweetCard(item, { username, avatarUrl: avatar }));
+      });
+    } catch (e) {
       const d = document.createElement('div');
       d.className = 'error';
       d.textContent = `Failed to load @${username}. Nitter might be down.`;
@@ -346,7 +338,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /* ---------- Channel view ---------- */
-   async function openChannel(username) {
+  async function openChannel(username) {
     const handle = (username || '').replace('@', '').trim();
     if (!handle) return;
     currentChannelUser = handle;
@@ -355,35 +347,17 @@ document.addEventListener('DOMContentLoaded', () => {
     switchView('channel');
     channelChip.textContent = '@' + handle;
     channelContainer.innerHTML = '<div class="loader">Loading @' + escapeHtml(handle) + '…</div>';
-    let added = 0;
-
-    // 1) Primary: HTML-scrape
-    channelContainer.innerHTML = '';
-    if (window.Android) {
-      try {
-        const frags = (await withTimeout(nativeFetchPage(`${NITTER_INSTANCE}/${handle}`), 20000)).split('\u0001').filter(Boolean);
-        frags.forEach(f => {
-          const en = fragmentEntry(f);
-          if (en) { channelContainer.appendChild(en.card); added++; }
-        });
-      } catch (e) {}
+    try {
+      const text = await rssFetch(`${RSS_INSTANCE}/${handle}/rss`);
+      const xml = new DOMParser().parseFromString(text, 'text/xml');
+      const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
+      const items = xml.querySelectorAll('item');
+      channelContainer.innerHTML = '';
+      if (!items.length) { channelContainer.innerHTML = '<p class="empty-state">No posts found.</p>'; return; }
+      items.forEach(item => channelContainer.appendChild(buildTweetCard(item, { username: handle, avatarUrl: avatar })));
+    } catch (e) {
+      channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '. Nitter might be down.</div>';
     }
-
-    // 2) Fallback: RSS
-    if (!added) {
-      try {
-        const text = await rssFetch(`${RSS_INSTANCE}/${handle}/rss`);
-        const xml = new DOMParser().parseFromString(text, 'text/xml');
-        const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
-        channelContainer.innerHTML = '';
-        xml.querySelectorAll('item').forEach(item => {
-          channelContainer.appendChild(buildTweetCard(item, { username: handle, avatarUrl: avatar }));
-          added++;
-        });
-      } catch (e) {}
-    }
-
-    if (!added) channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '.</div>';
   }
 
   /* ---------- Search (multi-strategy) ---------- */
@@ -550,7 +524,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return channels;
   }
 
-    async function loadTrends() {
+  async function loadTrends() {
     const category = trendSelect.value || 'world';
     const channels = getCuratedChannels(category);
 
@@ -565,52 +539,34 @@ document.addEventListener('DOMContentLoaded', () => {
     loader.textContent = `Fetching ${CAT_LABEL[category]}… 0/${channels.length}`;
     trendContainer.appendChild(loader);
 
-    const entries = [];
+    const collected = [];
     let done = 0;
     let debugRaw = '';
 
-    const tasks = channels.map(ch => async () => {
-      const local = [];
-
-      // 1) Primary: HTML-scrape (works on kareem.one, bypasses disabled RSS)
-      if (window.Android) {
-        try {
-          const frags = (await withTimeout(nativeFetchPage(`${NITTER_INSTANCE}/${ch.handle}`), 20000)).split('\u0001').filter(Boolean);
-          frags.slice(0, 3).forEach(f => { const en = fragmentEntry(f); if (en) local.push(en); });
-        } catch (e) { if (!debugRaw) debugRaw = 'ERR: ' + e.message; }
-      }
-
-      // 2) Fallback: RSS
-      if (!local.length) {
-        try {
-          const text = await rssFetch(`${RSS_INSTANCE}/${ch.handle}/rss`);
-          if (!debugRaw) debugRaw = text;
-          const xml = new DOMParser().parseFromString(text, 'text/xml');
-          if (!xml.querySelector('parsererror')) {
-            const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
-            [...xml.querySelectorAll('item')].slice(0, 3).forEach(item => {
-              local.push({
-                dateMs: Date.parse(item.querySelector('pubDate')?.textContent || '') || 0,
-                card: buildTweetCard(item, { username: ch.handle, avatarUrl: avatar, cat: ch.cat })
-              });
-            });
-          }
-        } catch (e) { if (!debugRaw) debugRaw = 'ERR: ' + e.message; }
-      }
-
-      entries.push(...local);
+    await Promise.all(channels.map(async ch => {
+      try {
+        const text = await rssFetch(`${RSS_INSTANCE}/${ch.handle}/rss`);
+        if (!debugRaw) debugRaw = text;
+        const xml = new DOMParser().parseFromString(text, 'text/xml');
+        if (!xml.querySelector('parsererror')) {
+          const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
+          [...xml.querySelectorAll('item')].slice(0, 3).forEach(item => {
+            collected.push({ item, username: ch.handle, avatarUrl: avatar, cat: ch.cat });
+          });
+        }
+      } catch (e) {}
       done++;
       loader.textContent = `Fetching ${CAT_LABEL[category]}… ${done}/${channels.length}`;
-    });
+    }));
 
-    await pool(tasks, 4);
     loader.remove();
 
-    entries.sort((a, b) => b.dateMs - a.dateMs);
-    entries.forEach(en => trendContainer.appendChild(en.card));
+    collected.sort((a, b) =>
+      new Date(b.item.querySelector('pubDate')?.textContent || 0) -
+      new Date(a.item.querySelector('pubDate')?.textContent || 0));
 
-    if (!entries.length) {
-      const snippet = (debugRaw || 'no data').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
+    if (!collected.length) {
+      const snippet = (debugRaw || 'no data').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
       const err = document.createElement('div');
       err.className = 'error';
       err.style.cssText = 'text-align:left; font-size:11px; word-break:break-all;';
@@ -619,6 +575,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    collected.forEach(c => trendContainer.appendChild(buildTweetCard(c.item, c)));
     header.innerHTML = `🔥 ${CAT_LABEL[category]} — latest from ${channels.length} channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
   }
 
@@ -956,7 +913,8 @@ document.addEventListener('DOMContentLoaded', () => {
   switchView('trends');
   trendsLoaded = true;
   trendContainer.innerHTML = '<div class="loader">Finding a live Nitter instance…</div>';
-  withTimeout(probeInstance(), 20000).catch(() => {}).finally(() => {
+  withTimeout(probeInstance(), 20000).catch(() => {}).finally(async () => {
+    if (!RSS_OK && window.Android) await withTimeout(probeWebInstance(), 45000).catch(() => {});
     loadTrends();
   });
 });
