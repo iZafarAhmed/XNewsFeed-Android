@@ -112,23 +112,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const viewTrends = document.getElementById('view-trends');
   const viewChannel = document.getElementById('view-channel');
 
-  let NITTER_INSTANCE = 'https://xcancel.com';        // HTML pages (status / search)
-  let RSS_INSTANCE = 'https://rss.xcancel.com';       // RSS feeds (xcancel moved RSS here)
-    const UA_LIST = [
-    'Feeder/2.9.11 (Android)',
-    'Feedly/1.0',
-    'NetNewsWire/6.1.4 (Mac OS X; en_US)',
-    'Tiny Tiny RSS/24.02 (http://tt-rss.org/)',
-    'Miniflux/2.1.3',
-    'Inoreader/1.0.0 (+http://www.inoreader.com)'
-  ];
-  let RSS_UA = UA_LIST[0];
+    let NITTER_INSTANCE = 'https://nitter.kareem.one';
+  let RSS_INSTANCE = 'https://nitter.kareem.one';
   const INSTANCE_LIST = [
+    { web: 'https://nitter.kareem.one', rss: 'https://nitter.kareem.one' },
     { web: 'https://xcancel.com', rss: 'https://rss.xcancel.com' },
-    { web: 'https://nitter.privacyredirect.com', rss: 'https://nitter.privacyredirect.com' },
-    { web: 'https://nitter.net', rss: 'https://nitter.net' },
-    { web: 'https://nitter.poast.org', rss: 'https://nitter.poast.org' }
-  ];
 
   const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻', crypto: '🪙', business: '💼', science: '🔬', world: '🌐' };
   const CAT_LABEL = {
