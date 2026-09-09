@@ -33,8 +33,9 @@ public class MainActivity extends Activity {
             "if(!n.length){n=document.querySelectorAll('.tweet-body');}" +
             "var out=[];for(var i=0;i<n.length;i++){out.push(n[i].outerHTML);}" +
             "return out.join('\\u0001');})()";
+    // ✅ FIX: use outerHTML so it works for BOTH raw XML and rendered HTML
     private static final String EXTRACT_RAW_JS =
-            "(function(){return document.body?document.body.innerText:(document.documentElement?document.documentElement.innerText:'');})()";
+            "(function(){return document.documentElement?document.documentElement.outerHTML:(document.body?document.body.outerHTML:'');})()";
 
     private WebView webView;
 
@@ -165,7 +166,7 @@ public class MainActivity extends Activity {
             doFetch(url, id, ua);
         }
 
-        // Loads any URL in a hidden real browser and returns the visible text (XML included)
+        // ✅ Hidden WebView fetch — works silently inside app, shares cookie jar
         @JavascriptInterface
         public void fetchRaw(final String url, final String id) {
             webView.post(() -> {
@@ -189,12 +190,13 @@ public class MainActivity extends Activity {
                                 Object o = new JSONTokener(value).nextValue();
                                 if (o instanceof String) txt = (String) o;
                             } catch (Exception ignored) {}
-                            if (txt.length() > 100) {
+                            // Success: XML response contains <rss
+                            if (txt.contains("<rss")) {
                                 done[0] = true;
                                 deliver(id, txt);
                                 hw.destroy();
-                            } else if (attempts < 12) {
-                                hw.postDelayed(poll[0], 1000);
+                            } else if (attempts < 25) {
+                                hw.postDelayed(poll[0], 700);
                             } else {
                                 done[0] = true;
                                 deliver(id, txt);
@@ -206,7 +208,7 @@ public class MainActivity extends Activity {
                 hw.setWebViewClient(new WebViewClient() {
                     @Override
                     public void onPageFinished(WebView view, String u) {
-                        hw.postDelayed(poll[0], 800);
+                        hw.postDelayed(poll[0], 600);
                     }
                 });
                 hw.postDelayed(() -> {
@@ -215,12 +217,11 @@ public class MainActivity extends Activity {
                         deliver(id, "");
                         hw.destroy();
                     }
-                }, 20000);
+                }, 30000);
                 hw.loadUrl(url);
             });
         }
 
-        // Loads a page in a hidden real browser and extracts tweet blocks
         @JavascriptInterface
         public void fetchPage(final String url, final String id) {
             webView.post(() -> {
