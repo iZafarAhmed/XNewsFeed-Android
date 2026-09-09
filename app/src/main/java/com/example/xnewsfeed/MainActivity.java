@@ -33,6 +33,8 @@ public class MainActivity extends Activity {
             "if(!n.length){n=document.querySelectorAll('.tweet-body');}" +
             "var out=[];for(var i=0;i<n.length;i++){out.push(n[i].outerHTML);}" +
             "return out.join('\\u0001');})()";
+    private static final String EXTRACT_RAW_JS =
+            "(function(){return document.body?document.body.innerText:(document.documentElement?document.documentElement.innerText:'');})()";
 
     private WebView webView;
 
@@ -163,6 +165,62 @@ public class MainActivity extends Activity {
             doFetch(url, id, ua);
         }
 
+        // Loads any URL in a hidden real browser and returns the visible text (XML included)
+        @JavascriptInterface
+        public void fetchRaw(final String url, final String id) {
+            webView.post(() -> {
+                final WebView hw = new WebView(getApplicationContext());
+                hw.getSettings().setJavaScriptEnabled(true);
+                hw.getSettings().setDomStorageEnabled(true);
+                hw.getSettings().setUserAgentString(UA);
+                CookieManager.getInstance().setAcceptThirdPartyCookies(hw, true);
+                final boolean[] done = {false};
+                final Runnable[] poll = new Runnable[1];
+                poll[0] = new Runnable() {
+                    int attempts = 0;
+                    @Override
+                    public void run() {
+                        if (done[0]) return;
+                        attempts++;
+                        hw.evaluateJavascript(EXTRACT_RAW_JS, value -> {
+                            if (done[0]) return;
+                            String txt = "";
+                            try {
+                                Object o = new JSONTokener(value).nextValue();
+                                if (o instanceof String) txt = (String) o;
+                            } catch (Exception ignored) {}
+                            if (txt.length() > 100) {
+                                done[0] = true;
+                                deliver(id, txt);
+                                hw.destroy();
+                            } else if (attempts < 12) {
+                                hw.postDelayed(poll[0], 1000);
+                            } else {
+                                done[0] = true;
+                                deliver(id, txt);
+                                hw.destroy();
+                            }
+                        });
+                    }
+                };
+                hw.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public void onPageFinished(WebView view, String u) {
+                        hw.postDelayed(poll[0], 800);
+                    }
+                });
+                hw.postDelayed(() -> {
+                    if (!done[0]) {
+                        done[0] = true;
+                        deliver(id, "");
+                        hw.destroy();
+                    }
+                }, 20000);
+                hw.loadUrl(url);
+            });
+        }
+
+        // Loads a page in a hidden real browser and extracts tweet blocks
         @JavascriptInterface
         public void fetchPage(final String url, final String id) {
             webView.post(() -> {
@@ -170,8 +228,8 @@ public class MainActivity extends Activity {
                 hw.getSettings().setJavaScriptEnabled(true);
                 hw.getSettings().setDomStorageEnabled(true);
                 hw.getSettings().setUserAgentString(UA);
+                CookieManager.getInstance().setAcceptThirdPartyCookies(hw, true);
                 final boolean[] done = {false};
-
                 final Runnable[] poll = new Runnable[1];
                 poll[0] = new Runnable() {
                     int attempts = 0;
@@ -200,14 +258,12 @@ public class MainActivity extends Activity {
                         });
                     }
                 };
-
                 hw.setWebViewClient(new WebViewClient() {
                     @Override
                     public void onPageFinished(WebView view, String finishedUrl) {
                         hw.postDelayed(poll[0], 1000);
                     }
                 });
-
                 hw.postDelayed(() -> {
                     if (!done[0]) {
                         done[0] = true;
@@ -215,7 +271,6 @@ public class MainActivity extends Activity {
                         hw.destroy();
                     }
                 }, 25000);
-
                 hw.loadUrl(url);
             });
         }
