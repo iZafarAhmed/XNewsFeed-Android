@@ -3,13 +3,14 @@ package com.example.xnewsfeed;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.os.Bundle;
-import android.view.View;
+import android.view.Gravity;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.FrameLayout;
 
 import org.json.JSONObject;
@@ -30,7 +31,7 @@ public class MainActivity extends Activity {
     private static final String PROXY_BASE = "https://proxy.xnewsfeed.local/";
     private static final String UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
 
-    // Extracts RSS XML or tweet blocks from inside the hidden real browser
+    // Extracts RSS XML or tweet blocks from inside a hidden browser
     private static final String EXTRACT_JS =
             "(function(){" +
             "var root=document.documentElement;" +
@@ -44,14 +45,28 @@ public class MainActivity extends Activity {
             "return out.join('\\u0001');}" +
             "return '';})()";
 
+    // Detects when a Cloudflare challenge has been PASSED in the visible verifier
+    private static final String VERIFY_JS =
+            "(function(){" +
+            "var t=(document.body&&document.body.innerText)||'';" +
+            "if(/Verifying your browser|Just a moment|Checking your browser|Attention required/i.test(t))return '';" +
+            "var root=document.documentElement;" +
+            "if(root&&root.nodeName&&root.nodeName.toLowerCase()==='rss')return 'ok';" +
+            "if(document.querySelector('rss'))return 'ok';" +
+            "if(document.querySelector('.timeline-item,.tweet-body,.main-content,nav,.content'))return 'ok';" +
+            "return '';})()";
+
     private FrameLayout root;
     private WebView webView;
+    private WebView verifyView;
+    private Button verifyClose;
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // App-wide cookies: once the human passes the check, ALL webviews are unlocked
         CookieManager.getInstance().setAcceptCookie(true);
 
         webView = new WebView(this);
@@ -96,7 +111,6 @@ public class MainActivity extends Activity {
 
         webView.addJavascriptInterface(new Bridge(), "Android");
 
-        // ✅ Root layout so hidden browsers can be ATTACHED (real viewport = passes bot checks)
         root = new FrameLayout(this);
         root.addView(webView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
@@ -106,11 +120,91 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (verifyView != null) { finishVerifier(false); return; }
         if (webView.canGoBack()) {
             webView.goBack();
         } else {
             super.onBackPressed();
         }
+    }
+
+    /* ========== 🛡️ VISIBLE VERIFIER (human solves the check once) ========== */
+    @SuppressLint("SetJavaScriptEnabled")
+    private void showVerifier(final String url) {
+        webView.post(() -> {
+            if (verifyView != null) return; // already showing
+
+            verifyView = new WebView(this);
+            verifyView.getSettings().setJavaScriptEnabled(true);
+            verifyView.getSettings().setDomStorageEnabled(true);
+            verifyView.getSettings().setUserAgentString(UA);
+            root.addView(verifyView, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+            verifyClose = new Button(this);
+            verifyClose.setText("✕ Close");
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+            lp.gravity = Gravity.TOP | Gravity.END;
+            lp.setMargins(24, 24, 24, 24);
+            root.addView(verifyClose, lp);
+            verifyClose.bringToFront();
+            verifyClose.setOnClickListener(v -> finishVerifier(false));
+
+            final boolean[] done = {false};
+            final Runnable[] poll = new Runnable[1];
+            poll[0] = new Runnable() {
+                int attempts = 0;
+
+                @Override
+                public void run() {
+                    if (done[0] || verifyView == null) return;
+                    attempts++;
+                    verifyView.evaluateJavascript(VERIFY_JS, value -> {
+                        if (done[0]) return;
+                        boolean ok = false;
+                        try {
+                            Object o = new JSONTokener(value).nextValue();
+                            ok = "ok".equals(o);
+                        } catch (Exception ignored) {}
+                        if (ok) {
+                            done[0] = true;
+                            finishVerifier(true);
+                        } else if (attempts < 90) {
+                            verifyView.postDelayed(poll[0], 1000);
+                        } else {
+                            done[0] = true;
+                            finishVerifier(false);
+                        }
+                    });
+                }
+            };
+
+            verifyView.setWebViewClient(new WebViewClient() {
+                @Override
+                public void onPageFinished(WebView view, String finishedUrl) {
+                    view.postDelayed(poll[0], 800);
+                }
+            });
+
+            verifyView.loadUrl(url);
+        });
+    }
+
+    private void finishVerifier(final boolean ok) {
+        webView.post(() -> {
+            if (verifyView != null) {
+                root.removeView(verifyView);
+                verifyView.destroy();
+                verifyView = null;
+            }
+            if (verifyClose != null) {
+                root.removeView(verifyClose);
+                verifyClose = null;
+            }
+            webView.evaluateJavascript(
+                    "window.__onVerify && window.__onVerify(" + (ok ? "true" : "false") + ")", null);
+        });
     }
 
     private void destroyHw(final WebView hw) {
@@ -135,7 +229,13 @@ public class MainActivity extends Activity {
 
     private class Bridge {
 
-        // ✅ Hidden BUT attached real Chromium WebView (invisible, full-size)
+        // ✅ JS asks the app to show the human-verification overlay
+        @JavascriptInterface
+        public void openVerifier(final String url) {
+            showVerifier(url);
+        }
+
+        // Hidden attached Chromium WebView for silent fetches (uses saved cookies)
         @JavascriptInterface
         public void fetchPage(final String url, final String id) {
             webView.post(() -> {
@@ -144,13 +244,11 @@ public class MainActivity extends Activity {
                 hw.getSettings().setDomStorageEnabled(true);
                 hw.getSettings().setUserAgentString(UA);
 
-                // Attach invisibly with real dimensions (bot checks see a normal viewport)
                 root.addView(hw, new FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-                hw.setVisibility(View.INVISIBLE);
+                hw.setVisibility(android.view.View.INVISIBLE);
 
                 final boolean[] done = {false};
-
                 final Runnable[] poll = new Runnable[1];
                 poll[0] = new Runnable() {
                     int attempts = 0;
