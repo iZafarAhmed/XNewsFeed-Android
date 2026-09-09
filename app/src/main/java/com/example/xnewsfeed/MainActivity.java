@@ -29,7 +29,6 @@ public class MainActivity extends Activity {
     private static final String UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
 
     // Extracts RSS XML or tweet blocks from inside the hidden real browser.
-    // Returns '' while an anti-bot challenge page is showing (so polling continues).
     private static final String EXTRACT_JS =
             "(function(){" +
             "var root=document.documentElement;" +
@@ -106,25 +105,25 @@ public class MainActivity extends Activity {
         }
     }
 
-    // Sends a result back to the app's JavaScript (__onFetch callback map)
+    // ✅ FIXED: Use a final string for the lambda capture
     private void deliver(final String id, final String body) {
-        String payload;
+        String tempPayload;
         try {
             JSONObject res = new JSONObject();
             res.put("ok", true);
             res.put("body", body);
-            payload = JSONObject.quote(res.toString());
+            tempPayload = JSONObject.quote(res.toString());
         } catch (Exception e) {
-            payload = "\"{\\\"ok\\\":false,\\\"error\\\":\\\"parse error\\\"}\"";
+            tempPayload = "\"{\\\"ok\\\":false,\\\"error\\\":\\\"parse error\\\"}\"";
         }
+        final String finalPayload = tempPayload;
         webView.post(() -> webView.evaluateJavascript(
-                "window.__onFetch && window.__onFetch(" + JSONObject.quote(id) + ", " + payload + ")", null));
+                "window.__onFetch && window.__onFetch(" + JSONObject.quote(id) + ", " + finalPayload + ")", null));
     }
 
     private class Bridge {
 
-        // ✅ Hidden REAL Chromium WebView: loads any page/RSS like a human browser,
-        // waits out anti-bot challenges, then extracts RSS XML or tweet blocks.
+        // ✅ Hidden REAL Chromium WebView
         @JavascriptInterface
         public void fetchPage(final String url, final String id) {
             webView.post(() -> {
@@ -134,7 +133,7 @@ public class MainActivity extends Activity {
                 hw.getSettings().setUserAgentString(UA);
                 final boolean[] done = {false};
 
-                // Poll every 1.5s until real content appears (challenge may take a few seconds)
+                // Poll every 1.5s until real content appears
                 final Runnable[] poll = new Runnable[1];
                 poll[0] = new Runnable() {
                     int attempts = 0;
@@ -156,7 +155,7 @@ public class MainActivity extends Activity {
                                 deliver(id, html);
                                 hw.destroy();
                             } else if (attempts < 15) {
-                                hw.postDelayed(poll[0], 1500);   // still verifying… wait
+                                hw.postDelayed(poll[0], 1500);
                             } else {
                                 done[0] = true;
                                 deliver(id, "");
@@ -186,11 +185,11 @@ public class MainActivity extends Activity {
             });
         }
 
-        // Plain native fetch (fallback path), with gzip + UTF-8 support
+        // Plain native fetch (fallback path)
         @JavascriptInterface
         public void fetch(final String url, final String id) {
             new Thread(() -> {
-                String payload;
+                String tempPayload;
                 try {
                     HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
                     c.setRequestProperty("User-Agent", UA);
@@ -215,19 +214,19 @@ public class MainActivity extends Activity {
                     JSONObject res = new JSONObject();
                     res.put("ok", true);
                     res.put("body", sb.toString());
-                    payload = JSONObject.quote(res.toString());
+                    tempPayload = JSONObject.quote(res.toString());
                 } catch (Exception e) {
                     try {
                         JSONObject res = new JSONObject();
                         res.put("ok", false);
                         res.put("error", e.getMessage() != null ? e.getMessage() : "Unknown error");
-                        payload = JSONObject.quote(res.toString());
+                        tempPayload = JSONObject.quote(res.toString());
                     } catch (Exception jsonEx) {
-                        payload = "\"{\\\"ok\\\":false,\\\"error\\\":\\\"Unknown error\\\"}\"";
+                        tempPayload = "\"{\\\"ok\\\":false,\\\"error\\\":\\\"Unknown error\\\"}\"";
                     }
                 }
 
-                final String finalPayload = payload;
+                final String finalPayload = tempPayload;
                 webView.post(() -> webView.evaluateJavascript(
                         "window.__onFetch && window.__onFetch(" + JSONObject.quote(id) + ", " + finalPayload + ")", null));
             }).start();
