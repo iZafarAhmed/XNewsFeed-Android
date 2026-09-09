@@ -1,6 +1,5 @@
-// app.js — X News Feed (FINAL — Android WebView + Browser compatible)
+// app.js — X News Feed (FINAL v2 — kareem.one primary + full feature set)
 
-// Visible runtime-error banner (so a blank screen never happens silently again)
 window.addEventListener('error', (e) => {
   const d = document.createElement('div');
   d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#d93025;color:#fff;font-size:11px;padding:6px;z-index:999;word-break:break-all;';
@@ -41,19 +40,19 @@ window.__onFetch = function (id, jsonStr) {
   } catch (e) { cb.reject(e); }
 };
 
-function nativeFetchUA(url, ua) {
-  return new Promise((resolve, reject) => {
-    const id = 'f' + (++_cbId);
-    _cbs[id] = { resolve, reject };
-    window.Android.fetchUA(url, id, ua);
-  });
-}
-
 function nativeFetch(url) {
   return new Promise((resolve, reject) => {
     const id = 'f' + (++_cbId);
     _cbs[id] = { resolve, reject };
     window.Android.fetch(url, id);
+  });
+}
+
+function nativeFetchUA(url, ua) {
+  return new Promise((resolve, reject) => {
+    const id = 'f' + (++_cbId);
+    _cbs[id] = { resolve, reject };
+    window.Android.fetchUA(url, id, ua);
   });
 }
 
@@ -76,7 +75,6 @@ async function smartFetch(url) {
       const res = await withTimeout(fetch('https://proxy.xnewsfeed.local/' + encodeURIComponent(url)), 12000);
       if (res.ok) {
         const text = await res.text();
-        // If the server answered with the "RSS client" notice page, retry via the bridge
         if (!(url.includes('/rss') && text.includes('RSS client'))) return text;
       }
     } catch (e) {}
@@ -86,8 +84,14 @@ async function smartFetch(url) {
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.text();
 }
+
 async function rssFetch(url) {
-  if (window.Android) return withTimeout(nativeFetchUA(url, RSS_UA), 12000);
+  if (window.Android) {
+    try {
+      return await withTimeout(nativeFetchUA(url, window.__RSS_UA || 'XNewsFeed/1.0'), 12000);
+    } catch (e) {}
+    return withTimeout(nativeFetch(url), 12000);
+  }
   const res = await withTimeout(fetch(url), 12000);
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.text();
@@ -112,11 +116,27 @@ document.addEventListener('DOMContentLoaded', () => {
   const viewTrends = document.getElementById('view-trends');
   const viewChannel = document.getElementById('view-channel');
 
-    let NITTER_INSTANCE = 'https://nitter.kareem.one';
+  if (!feedContainer || !trendContainer) {
+    document.body.insertAdjacentHTML('beforeend', '<div style="color:#d93025;padding:10px;">index.html is outdated — replace it with the 9-category version.</div>');
+    return;
+  }
+
+  let NITTER_INSTANCE = 'https://nitter.kareem.one';
   let RSS_INSTANCE = 'https://nitter.kareem.one';
   const INSTANCE_LIST = [
     { web: 'https://nitter.kareem.one', rss: 'https://nitter.kareem.one' },
     { web: 'https://xcancel.com', rss: 'https://rss.xcancel.com' },
+    { web: 'https://nitter.privacyredirect.com', rss: 'https://nitter.privacyredirect.com' },
+    { web: 'https://nitter.net', rss: 'https://nitter.net' }
+  ];
+  const UA_LIST = [
+    'XNewsFeed/1.0',
+    'Feeder/2.9.11 (Android)',
+    'Feedly/1.0',
+    'NetNewsWire/6.1.4 (Mac OS X; en_US)',
+    'Tiny Tiny RSS/24.02 (http://tt-rss.org/)'
+  ];
+  window.__RSS_UA = UA_LIST[0];
 
   const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻', crypto: '🪙', business: '💼', science: '🔬', world: '🌐' };
   const CAT_LABEL = {
@@ -133,60 +153,26 @@ document.addEventListener('DOMContentLoaded', () => {
   let channelMode = 'user';
   let currentSearchQuery = '';
 
-  /* ---------- Instance failover ---------- */
-   let RSS_OK = false;
-
+  /* ---------- Instance probe ---------- */
   async function probeInstance() {
-    for (const ua of UA_LIST) {
-      try {
-        const text = window.Android
-          ? await withTimeout(nativeFetchUA('https://rss.xcancel.com/MiddleEastEye/rss', ua), 6000)
-          : await (await withTimeout(fetch('https://rss.xcancel.com/MiddleEastEye/rss'), 6000)).text();
-        if (text && text.includes('<rss')) {
-          NITTER_INSTANCE = 'https://xcancel.com';
-          RSS_INSTANCE = 'https://rss.xcancel.com';
-          RSS_UA = ua;
-          RSS_OK = true;
-          return;
-        }
-      } catch (e) {}
-    }
     for (const entry of INSTANCE_LIST) {
-      try {
-        const text = window.Android
-          ? await withTimeout(nativeFetchUA(entry.rss + '/MiddleEastEye/rss', RSS_UA), 6000)
-          : await (await withTimeout(fetch(entry.rss + '/MiddleEastEye/rss'), 6000)).text();
-        if (text && text.includes('<rss')) {
-          NITTER_INSTANCE = entry.web;
-          RSS_INSTANCE = entry.rss;
-          RSS_OK = true;
-          return;
-        }
-      } catch (e) {}
+      for (const ua of UA_LIST) {
+        try {
+          const text = window.Android
+            ? await withTimeout(nativeFetchUA(entry.rss + '/MiddleEastEye/rss', ua), 7000)
+            : await (await withTimeout(fetch(entry.rss + '/MiddleEastEye/rss'), 7000)).text();
+          if (text && text.includes('<rss')) {
+            NITTER_INSTANCE = entry.web;
+            RSS_INSTANCE = entry.rss;
+            window.__RSS_UA = ua;
+            return;
+          }
+        } catch (e) {}
+      }
     }
   }
 
-  // ✅ NEW: healthy WEB instances (RSS disabled, but pages work) for the scrape engine
-  const WEB_LIST = [
-    'https://nitter.kareem.one',
-    'https://nitter.space',
-    'https://lightbrd.com',
-    'https://nitter.tiekoetter.com',
-    'https://nitter.catsarch.com',
-    'https://xcancel.com'
-  ];
-
-  async function probeWebInstance() {
-    if (!window.Android) return;
-    for (const inst of WEB_LIST) {
-      try {
-        const frags = (await nativeFetchPage(inst + '/MiddleEastEye')).split('\u0001').filter(Boolean);
-        if (frags.length) { NITTER_INSTANCE = inst; return; }
-      } catch (e) {}
-    }
-  }
-
-  /* ---------- Global click handling ---------- */
+  /* ---------- Global clicks ---------- */
   document.body.addEventListener('click', (e) => {
     const searchLink = e.target.closest('.in-app-search');
     if (searchLink) { e.preventDefault(); openSearch(searchLink.getAttribute('data-query')); return; }
@@ -207,7 +193,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.target.classList.contains('translate-btn')) {
       const btn = e.target;
       const card = btn.closest('.tweet-card');
-      const contentEl = card.querySelector('.tweet-content');
+      const contentEl = card ? card.querySelector('.tweet-content') : null;
       if (!contentEl) return;
       if (contentEl.dataset.translated === '1') {
         contentEl.innerHTML = contentEl.dataset.original;
@@ -266,8 +252,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   refreshBtn.addEventListener('click', async () => {
-    await withTimeout(probeInstance(), 20000).catch(() => {});
-    if (!RSS_OK && window.Android) await withTimeout(probeWebInstance(), 45000).catch(() => {});
+    await withTimeout(probeInstance(), 15000).catch(() => {});
     if (currentView === 'feed') reloadFeeds();
     else if (currentView === 'trends') loadTrends();
     else if (currentView === 'channel') (channelMode === 'search' ? openSearch(currentSearchQuery) : openChannel(currentChannelUser));
@@ -310,14 +295,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function fetchFeed(username, container) {
     container.querySelectorAll(`.tweet-card[data-user="${username}"]`).forEach(el => el.remove());
+    let added = 0;
     try {
       const text = await rssFetch(`${RSS_INSTANCE}/${username}/rss`);
       const xml = new DOMParser().parseFromString(text, 'text/xml');
       const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
       xml.querySelectorAll('item').forEach(item => {
         container.appendChild(buildTweetCard(item, { username, avatarUrl: avatar }));
+        added++;
       });
-    } catch (e) {
+    } catch (e) {}
+    if (!added && window.Android) {
+      try {
+        const frags = (await nativeFetchPage(`${NITTER_INSTANCE}/${username}`)).split('\u0001').filter(Boolean);
+        frags.forEach(f => { const en = fragmentEntry(f); if (en) { container.appendChild(en.card); added++; } });
+      } catch (e) {}
+    }
+    if (!added) {
       const d = document.createElement('div');
       d.className = 'error';
       d.textContent = `Failed to load @${username}. Nitter might be down.`;
@@ -335,20 +329,27 @@ document.addEventListener('DOMContentLoaded', () => {
     switchView('channel');
     channelChip.textContent = '@' + handle;
     channelContainer.innerHTML = '<div class="loader">Loading @' + escapeHtml(handle) + '…</div>';
+    let added = 0;
     try {
       const text = await rssFetch(`${RSS_INSTANCE}/${handle}/rss`);
       const xml = new DOMParser().parseFromString(text, 'text/xml');
       const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
-      const items = xml.querySelectorAll('item');
       channelContainer.innerHTML = '';
-      if (!items.length) { channelContainer.innerHTML = '<p class="empty-state">No posts found.</p>'; return; }
-      items.forEach(item => channelContainer.appendChild(buildTweetCard(item, { username: handle, avatarUrl: avatar })));
-    } catch (e) {
-      channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '. Nitter might be down.</div>';
+      xml.querySelectorAll('item').forEach(item => {
+        channelContainer.appendChild(buildTweetCard(item, { username: handle, avatarUrl: avatar }));
+        added++;
+      });
+    } catch (e) { channelContainer.innerHTML = ''; }
+    if (!added && window.Android) {
+      try {
+        const frags = (await nativeFetchPage(`${NITTER_INSTANCE}/${handle}`)).split('\u0001').filter(Boolean);
+        frags.forEach(f => { const en = fragmentEntry(f); if (en) { channelContainer.appendChild(en.card); added++; } });
+      } catch (e) {}
     }
+    if (!added) channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '.</div>';
   }
 
-  /* ---------- Search (multi-strategy) ---------- */
+  /* ---------- Search ---------- */
   async function openSearch(query) {
     if (!query) return;
     currentSearchQuery = query;
@@ -405,13 +406,9 @@ document.addEventListener('DOMContentLoaded', () => {
         channelContainer.appendChild(buildTweetCard(item, { username: handle }));
       });
     } else if (fragments.length) {
-      fragments.forEach(frag => {
-        const doc = new DOMParser().parseFromString(frag, 'text/html');
-        const node = doc.body ? doc.body.firstElementChild : null;
-        if (node) {
-          const card = buildSearchCard(node);
-          if (card) channelContainer.appendChild(card);
-        }
+      fragments.forEach(f => {
+        const en = fragmentEntry(f);
+        if (en) channelContainer.appendChild(en.card);
       });
     }
 
@@ -421,6 +418,25 @@ document.addEventListener('DOMContentLoaded', () => {
         '<p class="empty-state">No posts found for ' + escapeHtml(query) + '.</p>' +
         '<div class="error" style="text-align:left; font-size:11px; word-break:break-all;">DEBUG → ' + escapeHtml(snippet) + '</div>';
     }
+  }
+
+  /* ---------- Scrape helpers ---------- */
+  function fragmentEntry(frag) {
+    const doc = new DOMParser().parseFromString(frag, 'text/html');
+    const node = doc.body ? doc.body.firstElementChild : null;
+    if (!node) return null;
+    const card = buildSearchCard(node);
+    if (!card) return null;
+    const dateEl = node.querySelector('.tweet-date');
+    return { dateMs: Date.parse(dateEl?.getAttribute('title') || '') || 0, card };
+  }
+
+  async function pool(tasks, limit) {
+    let i = 0;
+    const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+      while (i < tasks.length) { const idx = i++; await tasks[idx](); }
+    });
+    await Promise.all(workers);
   }
 
   function buildSearchCard(node) {
@@ -482,7 +498,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (av) av.addEventListener('error', () => { av.outerHTML = fallbackAvatarHtml(creator); });
     card.querySelector('.tweet-user').addEventListener('click', () => openChannel(username));
     if (isVideo) {
-      card.querySelector('.media-container')?.addEventListener('click', function () { handleVideoPlayback(this); });
+      const mc = card.querySelector('.media-container');
+      if (mc) mc.addEventListener('click', function () { handleVideoPlayback(this); });
     }
     return card;
   }
@@ -527,11 +544,12 @@ document.addEventListener('DOMContentLoaded', () => {
     loader.textContent = `Fetching ${CAT_LABEL[category]}… 0/${channels.length}`;
     trendContainer.appendChild(loader);
 
-    const collected = [];
+    const entries = [];
     let done = 0;
     let debugRaw = '';
 
-    await Promise.all(channels.map(async ch => {
+    const tasks = channels.map(ch => async () => {
+      const local = [];
       try {
         const text = await rssFetch(`${RSS_INSTANCE}/${ch.handle}/rss`);
         if (!debugRaw) debugRaw = text;
@@ -539,22 +557,32 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!xml.querySelector('parsererror')) {
           const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
           [...xml.querySelectorAll('item')].slice(0, 3).forEach(item => {
-            collected.push({ item, username: ch.handle, avatarUrl: avatar, cat: ch.cat });
+            local.push({
+              dateMs: Date.parse(item.querySelector('pubDate')?.textContent || '') || 0,
+              card: buildTweetCard(item, { username: ch.handle, avatarUrl: avatar, cat: ch.cat })
+            });
           });
         }
-      } catch (e) {}
+      } catch (e) { if (!debugRaw) debugRaw = 'ERR: ' + e.message; }
+      if (!local.length && window.Android) {
+        try {
+          const frags = (await nativeFetchPage(`${NITTER_INSTANCE}/${ch.handle}`)).split('\u0001').filter(Boolean);
+          frags.slice(0, 3).forEach(f => { const en = fragmentEntry(f); if (en) local.push(en); });
+        } catch (e) {}
+      }
+      entries.push(...local);
       done++;
       loader.textContent = `Fetching ${CAT_LABEL[category]}… ${done}/${channels.length}`;
-    }));
+    });
 
+    await pool(tasks, 4);
     loader.remove();
 
-    collected.sort((a, b) =>
-      new Date(b.item.querySelector('pubDate')?.textContent || 0) -
-      new Date(a.item.querySelector('pubDate')?.textContent || 0));
+    entries.sort((a, b) => b.dateMs - a.dateMs);
+    entries.forEach(en => trendContainer.appendChild(en.card));
 
-    if (!collected.length) {
-      const snippet = (debugRaw || 'no data').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (!entries.length) {
+      const snippet = (debugRaw || 'no data').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
       const err = document.createElement('div');
       err.className = 'error';
       err.style.cssText = 'text-align:left; font-size:11px; word-break:break-all;';
@@ -563,7 +591,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    collected.forEach(c => trendContainer.appendChild(buildTweetCard(c.item, c)));
     header.innerHTML = `🔥 ${CAT_LABEL[category]} — latest from ${channels.length} channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
   }
 
@@ -710,7 +737,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
-  /* ---------- Translation (Google free + Lingva fallback) ---------- */
+  /* ---------- Translation ---------- */
   async function translateContent(contentEl) {
     const paragraphs = contentEl.querySelectorAll('.tweet-paragraph');
     if (!paragraphs.length) return;
@@ -901,8 +928,7 @@ document.addEventListener('DOMContentLoaded', () => {
   switchView('trends');
   trendsLoaded = true;
   trendContainer.innerHTML = '<div class="loader">Finding a live Nitter instance…</div>';
-  withTimeout(probeInstance(), 20000).catch(() => {}).finally(async () => {
-    if (!RSS_OK && window.Android) await withTimeout(probeWebInstance(), 45000).catch(() => {});
+  withTimeout(probeInstance(), 20000).catch(() => {}).finally(() => {
     loadTrends();
   });
 });
