@@ -67,19 +67,26 @@ async function smartFetch(url) {
 
 function looksLikeRss(t) { return !!t && t.includes('<rss'); }
 
+async function rssFetch(url) {
+  if (window.Android) return nativeFetch(url); // Java now sends RSS-client headers for /rss
+  const res = await fetch(url, { headers: { 'Accept': 'application/rss+xml, application/xml, text/xml, */*' } });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.text();
+}
+
 async function fetchRss(url) {
-  // 1) Hidden real browser (passes anti-bot when cookies exist)
+  // 1) Direct with RSS-client headers (fast; works on non-Cloudflare instances)
+  try {
+    const t = await rssFetch(url);
+    if (looksLikeRss(t)) return t;
+  } catch (e) {}
+  // 2) Hidden real browser (for Cloudflare instances once cookies exist)
   if (window.Android) {
     try {
       const t = await nativeFetchPage(url);
       if (looksLikeRss(t)) return t;
     } catch (e) {}
   }
-  // 2) Native proxy / bridge
-  try {
-    const t = await smartFetch(url);
-    if (looksLikeRss(t)) return t;
-  } catch (e) {}
   // 3) Public reader proxies
   const mirrors = [
     'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
@@ -127,10 +134,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const viewChannel = document.getElementById('view-channel');
 
   const INSTANCES = [
-    'https://nitter.kareem.one',
-    'https://nitter.net',
     'https://xcancel.com',
-    'https://nitter.poast.org'
+    'https://nitter.tiekoetter.com',
+    'https://nitter.privacyredirect.com',
+    'https://nitter.kareem.one',
+    'https://nitter.net'
   ];
   let NITTER_INSTANCE = INSTANCES[0];
 
