@@ -48,7 +48,7 @@ function nativeFetchPage(url) {
     window.Android.fetchPage(url, id);
     setTimeout(() => {
       if (_cbs[id]) { delete _cbs[id]; reject(new Error('timeout')); }
-    }, 30000);
+    }, 20000);
   });
 }
 
@@ -66,16 +66,35 @@ async function smartFetch(url) {
 }
 
 // ✅ RSS fetch: hidden real browser first (beats anti-bot), then normal paths
+function looksLikeRss(t) { return !!t && t.includes('<rss'); }
+
 async function fetchRss(url) {
+  // 1) Hidden real browser (passes anti-bot)
   if (window.Android) {
     try {
       const t = await nativeFetchPage(url);
-      if (t && t.includes('<rss')) return t;
+      if (looksLikeRss(t)) return t;
     } catch (e) {}
   }
-  const t = await smartFetch(url);
-  if (t && t.includes('<rss')) return t;
-  throw new Error('invalid rss response');
+  // 2) Native proxy / bridge
+  try {
+    const t = await smartFetch(url);
+    if (looksLikeRss(t)) return t;
+  } catch (e) {}
+  // 3) Public reader proxies (different IPs & fingerprints)
+  const mirrors = [
+    'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
+    'https://corsproxy.io/?url=' + encodeURIComponent(url)
+  ];
+  for (const m of mirrors) {
+    try {
+      const res = await fetch(m);
+      if (!res.ok) continue;
+      const t = await res.text();
+      if (looksLikeRss(t)) return t;
+    } catch (e) {}
+  }
+  throw new Error('all rss paths failed');
 }
 
 /* ========== APP ========== */
@@ -497,21 +516,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const collected = [];
     let done = 0;
 
-    await Promise.all(channels.map(async (ch, idx) => {
-      await new Promise(r => setTimeout(r, idx * 150)); // stagger hidden browsers
-      try {
-        const text = await fetchRss(`${NITTER_INSTANCE}/${ch.handle}/rss`);
-        const xml = new DOMParser().parseFromString(text, 'text/xml');
-        if (!xml.querySelector('parsererror')) {
-          const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
-          [...xml.querySelectorAll('item')].slice(0, 3).forEach(item => {
-            collected.push({ item, username: ch.handle, avatarUrl: avatar, cat: ch.cat });
-          });
-        }
-      } catch (e) {}
-      done++;
-      loader.textContent = `Fetching ${CAT_LABEL[category]}… ${done}/${channels.length}`;
-    }));
+        let firstErr = '';
+    let cursor = 0;
+    async function runner() {
+      while (cursor < channels.length) {
+        const ch = channels[cursor++];
+        try {
+          const text = await fetchRss(`${NITTER_INSTANCE}/${ch.handle}/rss`);
+          const xml = new DOMParser().parseFromString(text, 'text/xml');
+          if (!xml.querySelector('parsererror')) {
+            const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
+            [...xml.querySelectorAll('item')].slice(0, 3).forEach(item => {
+              collected.push({ item, username: ch.handle, avatarUrl: avatar, cat: ch.cat });
+            });
+          }
+        } catch (e) { firstErr = firstErr || (e && e.message) || 'fetch error'; }
+        done++;
+        loader.textContent = `Fetching ${CAT_LABEL[category]}… ${done}/${channels.length}`;
+      }
+    }
+    await Promise.all([runner(), runner(), runner()]);
 
     loader.remove();
 
@@ -522,7 +546,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!collected.length) {
       const err = document.createElement('div');
       err.className = 'error';
-      err.textContent = 'Couldn\'t fetch any channel in this category. Nitter might be down.';
+      err.textContent = 'Couldn\'t fetch any channel in this category. ' + (firstErr ? '(' + firstErr + ')' : 'Nitter might be down.');
       trendContainer.appendChild(err);
       return;
     }
