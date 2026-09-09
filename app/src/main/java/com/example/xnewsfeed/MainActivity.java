@@ -27,15 +27,19 @@ import java.util.zip.GZIPInputStream;
 public class MainActivity extends Activity {
     private static final String PROXY_BASE = "https://proxy.xnewsfeed.local/";
     private static final String UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
-    private static final String RSS_ACCEPT = "application/rss+xml, application/xml, text/xml, */*";
+
+    // Extracts RSS XML or tweet blocks from inside the hidden real browser.
+    // Returns '' while an anti-bot challenge page is showing (so polling continues).
     private static final String EXTRACT_JS =
-            "(function(){var n=document.querySelectorAll('.timeline-item');" +
+            "(function(){" +
+            "var root=document.documentElement;" +
+            "if(root&&root.nodeName&&root.nodeName.toLowerCase()==='rss'){" +
+            "return new XMLSerializer().serializeToString(root);}" +
+            "var n=document.querySelectorAll('.timeline-item');" +
             "if(!n.length){n=document.querySelectorAll('.tweet-body');}" +
-            "var out=[];for(var i=0;i<n.length;i++){out.push(n[i].outerHTML);}" +
-            "return out.join('\\u0001');})()";
-    // ✅ FIX: use outerHTML so it works for BOTH raw XML and rendered HTML
-    private static final String EXTRACT_RAW_JS =
-            "(function(){return document.documentElement?document.documentElement.outerHTML:(document.body?document.body.outerHTML:'');})()";
+            "if(n.length){var out=[];for(var i=0;i<n.length;i++){out.push(n[i].outerHTML);}" +
+            "return out.join('\\u0001');}" +
+            "return '';})()";
 
     private WebView webView;
 
@@ -43,6 +47,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Cookies ON so anti-bot challenges can complete and be remembered
         CookieManager.getInstance().setAcceptCookie(true);
 
         webView = new WebView(this);
@@ -51,6 +57,7 @@ public class MainActivity extends Activity {
         webView.getSettings().setAllowFileAccess(true);
         webView.getSettings().setMediaPlaybackRequiresUserGesture(false);
 
+        // Local proxy: lets JS fetch through a native connection when needed
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
@@ -59,19 +66,21 @@ public class MainActivity extends Activity {
                     try {
                         String target = URLDecoder.decode(url.substring(PROXY_BASE.length()), "UTF-8");
                         HttpURLConnection c = (HttpURLConnection) new URL(target).openConnection();
-                        boolean isRss = target.contains("/rss");
-                        c.setRequestProperty("User-Agent", isRss ? "Feeder/2.9.11 (Android)" : UA);
-                        c.setRequestProperty("Accept", isRss ? RSS_ACCEPT : "*/*");
+                        c.setRequestProperty("User-Agent", UA);
+                        c.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+                        c.setRequestProperty("Accept-Encoding", "gzip");
                         c.setConnectTimeout(15000);
                         c.setReadTimeout(20000);
                         c.setInstanceFollowRedirects(true);
+
                         InputStream is = c.getInputStream();
                         if ("gzip".equalsIgnoreCase(c.getContentEncoding())) {
                             is = new GZIPInputStream(is);
                         }
+
                         Map<String, String> headers = new HashMap<>();
                         headers.put("Access-Control-Allow-Origin", "*");
-                        String mime = isRss ? "application/xml" : "text/html";
+                        String mime = target.contains("rss") ? "application/xml" : "text/html";
                         return new WebResourceResponse(mime, "UTF-8", c.getResponseCode(), "OK", headers, is);
                     } catch (Exception e) {
                         String msg = String.valueOf(e.getMessage());
@@ -97,6 +106,7 @@ public class MainActivity extends Activity {
         }
     }
 
+    // Sends a result back to the app's JavaScript (__onFetch callback map)
     private void deliver(final String id, final String body) {
         String payload;
         try {
@@ -107,121 +117,14 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             payload = "\"{\\\"ok\\\":false,\\\"error\\\":\\\"parse error\\\"}\"";
         }
-        final String finalPayload = payload;
         webView.post(() -> webView.evaluateJavascript(
-                "window.__onFetch && window.__onFetch(" + JSONObject.quote(id) + ", " + finalPayload + ")", null));
-    }
-
-    private void doFetch(final String url, final String id, final String customUa) {
-        new Thread(() -> {
-            String payload;
-            try {
-                HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-                boolean isRss = url.contains("/rss");
-                c.setRequestProperty("User-Agent", customUa != null ? customUa : (isRss ? "Feeder/2.9.11 (Android)" : UA));
-                c.setRequestProperty("Accept", isRss ? RSS_ACCEPT : "*/*");
-                c.setRequestProperty("Accept-Encoding", "gzip");
-                c.setConnectTimeout(15000);
-                c.setReadTimeout(20000);
-                c.setInstanceFollowRedirects(true);
-                InputStream is = c.getInputStream();
-                if ("gzip".equalsIgnoreCase(c.getContentEncoding())) {
-                    is = new GZIPInputStream(is);
-                }
-                StringBuilder sb = new StringBuilder();
-                try (BufferedReader r = new BufferedReader(new InputStreamReader(is, "UTF-8"))) {
-                    String line;
-                    while ((line = r.readLine()) != null) {
-                        sb.append(line).append('\n');
-                    }
-                }
-                JSONObject res = new JSONObject();
-                res.put("ok", true);
-                res.put("body", sb.toString());
-                payload = JSONObject.quote(res.toString());
-            } catch (Exception e) {
-                try {
-                    JSONObject res = new JSONObject();
-                    res.put("ok", false);
-                    res.put("error", e.getMessage() != null ? e.getMessage() : "Unknown error");
-                    payload = JSONObject.quote(res.toString());
-                } catch (Exception jsonEx) {
-                    payload = "\"{\\\"ok\\\":false,\\\"error\\\":\\\"Unknown error\\\"}\"";
-                }
-            }
-            final String finalPayload = payload;
-            webView.post(() -> webView.evaluateJavascript(
-                    "window.__onFetch && window.__onFetch(" + JSONObject.quote(id) + ", " + finalPayload + ")", null));
-        }).start();
+                "window.__onFetch && window.__onFetch(" + JSONObject.quote(id) + ", " + payload + ")", null));
     }
 
     private class Bridge {
-        @JavascriptInterface
-        public void fetch(final String url, final String id) {
-            doFetch(url, id, null);
-        }
 
-        @JavascriptInterface
-        public void fetchUA(final String url, final String id, final String ua) {
-            doFetch(url, id, ua);
-        }
-
-        // ✅ Hidden WebView fetch — works silently inside app, shares cookie jar
-        @JavascriptInterface
-        public void fetchRaw(final String url, final String id) {
-            webView.post(() -> {
-                final WebView hw = new WebView(getApplicationContext());
-                hw.getSettings().setJavaScriptEnabled(true);
-                hw.getSettings().setDomStorageEnabled(true);
-                hw.getSettings().setUserAgentString(UA);
-                CookieManager.getInstance().setAcceptThirdPartyCookies(hw, true);
-                final boolean[] done = {false};
-                final Runnable[] poll = new Runnable[1];
-                poll[0] = new Runnable() {
-                    int attempts = 0;
-                    @Override
-                    public void run() {
-                        if (done[0]) return;
-                        attempts++;
-                        hw.evaluateJavascript(EXTRACT_RAW_JS, value -> {
-                            if (done[0]) return;
-                            String txt = "";
-                            try {
-                                Object o = new JSONTokener(value).nextValue();
-                                if (o instanceof String) txt = (String) o;
-                            } catch (Exception ignored) {}
-                            // Success: XML response contains <rss
-                            if (txt.contains("<rss")) {
-                                done[0] = true;
-                                deliver(id, txt);
-                                hw.destroy();
-                            } else if (attempts < 25) {
-                                hw.postDelayed(poll[0], 700);
-                            } else {
-                                done[0] = true;
-                                deliver(id, txt);
-                                hw.destroy();
-                            }
-                        });
-                    }
-                };
-                hw.setWebViewClient(new WebViewClient() {
-                    @Override
-                    public void onPageFinished(WebView view, String u) {
-                        hw.postDelayed(poll[0], 600);
-                    }
-                });
-                hw.postDelayed(() -> {
-                    if (!done[0]) {
-                        done[0] = true;
-                        deliver(id, "");
-                        hw.destroy();
-                    }
-                }, 30000);
-                hw.loadUrl(url);
-            });
-        }
-
+        // ✅ Hidden REAL Chromium WebView: loads any page/RSS like a human browser,
+        // waits out anti-bot challenges, then extracts RSS XML or tweet blocks.
         @JavascriptInterface
         public void fetchPage(final String url, final String id) {
             webView.post(() -> {
@@ -229,11 +132,13 @@ public class MainActivity extends Activity {
                 hw.getSettings().setJavaScriptEnabled(true);
                 hw.getSettings().setDomStorageEnabled(true);
                 hw.getSettings().setUserAgentString(UA);
-                CookieManager.getInstance().setAcceptThirdPartyCookies(hw, true);
                 final boolean[] done = {false};
+
+                // Poll every 1.5s until real content appears (challenge may take a few seconds)
                 final Runnable[] poll = new Runnable[1];
                 poll[0] = new Runnable() {
                     int attempts = 0;
+
                     @Override
                     public void run() {
                         if (done[0]) return;
@@ -245,12 +150,13 @@ public class MainActivity extends Activity {
                                 Object o = new JSONTokener(value).nextValue();
                                 if (o instanceof String) html = (String) o;
                             } catch (Exception ignored) {}
+
                             if (!html.isEmpty()) {
                                 done[0] = true;
                                 deliver(id, html);
                                 hw.destroy();
                             } else if (attempts < 15) {
-                                hw.postDelayed(poll[0], 1500);
+                                hw.postDelayed(poll[0], 1500);   // still verifying… wait
                             } else {
                                 done[0] = true;
                                 deliver(id, "");
@@ -259,12 +165,15 @@ public class MainActivity extends Activity {
                         });
                     }
                 };
+
                 hw.setWebViewClient(new WebViewClient() {
                     @Override
                     public void onPageFinished(WebView view, String finishedUrl) {
                         hw.postDelayed(poll[0], 1000);
                     }
                 });
+
+                // Hard timeout (25s)
                 hw.postDelayed(() -> {
                     if (!done[0]) {
                         done[0] = true;
@@ -272,8 +181,56 @@ public class MainActivity extends Activity {
                         hw.destroy();
                     }
                 }, 25000);
+
                 hw.loadUrl(url);
             });
+        }
+
+        // Plain native fetch (fallback path), with gzip + UTF-8 support
+        @JavascriptInterface
+        public void fetch(final String url, final String id) {
+            new Thread(() -> {
+                String payload;
+                try {
+                    HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+                    c.setRequestProperty("User-Agent", UA);
+                    c.setRequestProperty("Accept", "*/*");
+                    c.setRequestProperty("Accept-Encoding", "gzip");
+                    c.setConnectTimeout(15000);
+                    c.setReadTimeout(20000);
+                    c.setInstanceFollowRedirects(true);
+
+                    InputStream is = c.getInputStream();
+                    if ("gzip".equalsIgnoreCase(c.getContentEncoding())) {
+                        is = new GZIPInputStream(is);
+                    }
+                    StringBuilder sb = new StringBuilder();
+                    try (BufferedReader r = new BufferedReader(new InputStreamReader(is, "UTF-8"))) {
+                        String line;
+                        while ((line = r.readLine()) != null) {
+                            sb.append(line).append('\n');
+                        }
+                    }
+
+                    JSONObject res = new JSONObject();
+                    res.put("ok", true);
+                    res.put("body", sb.toString());
+                    payload = JSONObject.quote(res.toString());
+                } catch (Exception e) {
+                    try {
+                        JSONObject res = new JSONObject();
+                        res.put("ok", false);
+                        res.put("error", e.getMessage() != null ? e.getMessage() : "Unknown error");
+                        payload = JSONObject.quote(res.toString());
+                    } catch (Exception jsonEx) {
+                        payload = "\"{\\\"ok\\\":false,\\\"error\\\":\\\"Unknown error\\\"}\"";
+                    }
+                }
+
+                final String finalPayload = payload;
+                webView.post(() -> webView.evaluateJavascript(
+                        "window.__onFetch && window.__onFetch(" + JSONObject.quote(id) + ", " + finalPayload + ")", null));
+            }).start();
         }
     }
 }
