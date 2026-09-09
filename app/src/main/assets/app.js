@@ -1,13 +1,6 @@
-// app.js — X News Feed (FINAL v4 — only kareem.one, silent hidden-WebView RSS)
+// app.js — X News Feed (Android WebView + Browser compatible)
 
-window.addEventListener('error', (e) => {
-  const d = document.createElement('div');
-  d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#d93025;color:#fff;font-size:11px;padding:6px;z-index:999;word-break:break-all;';
-  d.textContent = 'JS ERROR: ' + e.message;
-  if (document.body) document.body.appendChild(d);
-});
-
-/* ========== STORAGE ========== */
+/* ========== STORAGE ABSTRACTION ========== */
 const store = {
   _has: typeof chrome !== 'undefined' && !!(chrome.storage && chrome.storage.local),
   get(keys, cb) {
@@ -26,7 +19,7 @@ const store = {
   }
 };
 
-/* ========== FETCH LAYER ========== */
+/* ========== FETCH ABSTRACTION + ANDROID BRIDGE ========== */
 let _cbId = 0;
 const _cbs = {};
 
@@ -48,52 +41,28 @@ function nativeFetch(url) {
   });
 }
 
-function nativeFetchRaw(url) {
-  return new Promise((resolve, reject) => {
-    const id = 'r' + (++_cbId);
-    _cbs[id] = { resolve, reject };
-    window.Android.fetchRaw(url, id);
-  });
-}
-
 function nativeFetchPage(url) {
   return new Promise((resolve, reject) => {
     const id = 'p' + (++_cbId);
     _cbs[id] = { resolve, reject };
     window.Android.fetchPage(url, id);
-    setTimeout(() => { if (_cbs[id]) { delete _cbs[id]; reject(new Error('timeout')); } }, 30000);
+    setTimeout(() => {
+      if (_cbs[id]) { delete _cbs[id]; reject(new Error('timeout')); }
+    }, 30000);
   });
 }
 
-function withTimeout(promise, ms) {
-  return Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
-}
-
-// Single source of truth — only kareem.one
-const NITTER_INSTANCE = 'https://nitter.kareem.one';
-
 async function smartFetch(url) {
   if (window.Android) {
+    // 1) WebView proxy (Chromium network stack)
     try {
-      const res = await withTimeout(fetch('https://proxy.xnewsfeed.local/' + encodeURIComponent(url)), 12000);
+      const res = await fetch('https://proxy.xnewsfeed.local/' + encodeURIComponent(url));
       if (res.ok) return await res.text();
     } catch (e) {}
-    return withTimeout(nativeFetch(url), 12000);
+    // 2) Java bridge fallback
+    return nativeFetch(url);
   }
-  const res = await withTimeout(fetch(url), 12000);
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  return res.text();
-}
-
-// ✅ Single RSS path: hidden WebView (silent, no verify step, works inside app)
-async function rssFetch(url) {
-  if (window.Android) {
-    try {
-      const t = await withTimeout(nativeFetchRaw(url), 30000);
-      if (t && t.includes('<rss')) return t;
-    } catch (e) {}
-  }
-  const res = await withTimeout(fetch(url), 10000);
+  const res = await fetch(url);
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.text();
 }
@@ -117,11 +86,39 @@ document.addEventListener('DOMContentLoaded', () => {
   const viewTrends = document.getElementById('view-trends');
   const viewChannel = document.getElementById('view-channel');
 
+  /* ✅ Instance failover list */
+  const INSTANCES = [
+    'https://nitter.kareem.one',
+    'https://nitter.net',
+    'https://xcancel.com',
+    'https://nitter.poast.org'
+  ];
+  let NITTER_INSTANCE = INSTANCES[0];
+
+  async function resolveInstance() {
+    let saved = '';
+    await new Promise(res => store.get(['activeInstance'], r => { saved = r.activeInstance || ''; res(); }));
+    const list = saved ? [saved, ...INSTANCES.filter(i => i !== saved)] : INSTANCES;
+    for (const inst of list) {
+      try {
+        const text = await smartFetch(`${inst}/FT/rss`);
+        if (text && text.includes('<rss')) {
+          NITTER_INSTANCE = inst;
+          store.set({ activeInstance: inst });
+          return inst;
+        }
+      } catch (e) {}
+    }
+    NITTER_INSTANCE = list[0];
+    return NITTER_INSTANCE;
+  }
+
   const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻', crypto: '🪙', business: '💼', science: '🔬', world: '🌐' };
   const CAT_LABEL = {
     news: '📰 News', ai: '🤖 AI', stocks: '💰 India Stocks',
-    war: '🌍 War News', tech: '💻 Tech News', crypto: '🪙 Crypto',
-    business: '💼 Business', science: '🔬 Science', world: '🌐 World News'
+    war: '🌍 War News', tech: '💻 Tech News',
+    crypto: '🪙 Crypto', business: '💼 Business',
+    science: '🔬 Science', world: '🌐 World News'
   };
 
   let currentView = 'feed';
@@ -132,17 +129,19 @@ document.addEventListener('DOMContentLoaded', () => {
   let channelMode = 'user';
   let currentSearchQuery = '';
 
-  /* ---------- Global clicks ---------- */
+  /* ---------- GLOBAL CLICK HANDLER ---------- */
   document.body.addEventListener('click', (e) => {
+    // In-app hashtag / search links
     const searchLink = e.target.closest('.in-app-search');
     if (searchLink) { e.preventDefault(); openSearch(searchLink.getAttribute('data-query')); return; }
     const userLink = e.target.closest('.in-app-user');
     if (userLink) { e.preventDefault(); openChannel(userLink.getAttribute('data-user')); return; }
 
+    // Remove user
     if (e.target.classList.contains('remove-btn')) {
       const userToRemove = e.target.getAttribute('data-user');
       store.get(['usernames'], (r) => {
-        const list = (r.usernames || []).filter(u => u !== userToRemove);
+        let list = (r.usernames || []).filter(u => u !== userToRemove);
         store.set({ usernames: list }, () => {
           document.querySelectorAll(`.tweet-card[data-user="${userToRemove}"]`).forEach(el => el.remove());
         });
@@ -150,28 +149,41 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    // Translate tweet
     if (e.target.classList.contains('translate-btn')) {
       const btn = e.target;
       const card = btn.closest('.tweet-card');
       const contentEl = card ? card.querySelector('.tweet-content') : null;
       if (!contentEl) return;
+
       if (contentEl.dataset.translated === '1') {
         contentEl.innerHTML = contentEl.dataset.original;
         delete contentEl.dataset.translated;
         btn.textContent = '🌐';
+        btn.title = 'Translate to English';
         return;
       }
+
       if (!contentEl.dataset.original) contentEl.dataset.original = contentEl.innerHTML;
+
       btn.disabled = true;
       btn.textContent = '⏳';
+
       translateContent(contentEl)
-        .then(() => { contentEl.dataset.translated = '1'; btn.textContent = '🔄'; })
-        .catch(() => { btn.textContent = '❗'; setTimeout(() => { btn.textContent = '🌐'; }, 2000); })
+        .then(() => {
+          contentEl.dataset.translated = '1';
+          btn.textContent = '🔄';
+          btn.title = 'Show original';
+        })
+        .catch(() => {
+          btn.textContent = '❗';
+          setTimeout(() => { btn.textContent = '🌐'; }, 2000);
+        })
         .finally(() => { btn.disabled = false; });
     }
   });
 
-  /* ---------- Theme ---------- */
+  /* ---------- THEME ---------- */
   store.get(['darkMode'], (r) => applyTheme(!!r.darkMode));
   themeBtn.addEventListener('click', () => {
     const dark = !document.body.classList.contains('dark');
@@ -183,7 +195,7 @@ document.addEventListener('DOMContentLoaded', () => {
     themeBtn.textContent = dark ? '☀️' : '🌙';
   }
 
-  /* ---------- Views ---------- */
+  /* ---------- VIEWS / TABS ---------- */
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
       const view = tab.dataset.view;
@@ -211,13 +223,14 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === lastTab));
   }
 
-  refreshBtn.addEventListener('click', () => {
+  refreshBtn.addEventListener('click', async () => {
+    await resolveInstance();
     if (currentView === 'feed') reloadFeeds();
     else if (currentView === 'trends') loadTrends();
     else if (currentView === 'channel') (channelMode === 'search' ? openSearch(currentSearchQuery) : openChannel(currentChannelUser));
   });
 
-  /* ---------- Controls ---------- */
+  /* ---------- CONTROLS ---------- */
   loadBtn.addEventListener('click', () => {
     const u = usernameInput.value.trim().replace('@', '');
     if (u) { addAndFetchUser(u); usernameInput.value = ''; }
@@ -233,7 +246,7 @@ document.addEventListener('DOMContentLoaded', () => {
     popularSelect.value = '';
   });
 
-  /* ---------- Feeds ---------- */
+  /* ---------- FEEDS ---------- */
   function reloadFeeds() {
     feedContainer.innerHTML = '<div class="loader">Loading feeds…</div>';
     store.get(['usernames'], (r) => {
@@ -254,23 +267,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function fetchFeed(username, container) {
     container.querySelectorAll(`.tweet-card[data-user="${username}"]`).forEach(el => el.remove());
-    let added = 0;
     try {
-      const text = await rssFetch(`${NITTER_INSTANCE}/${username}/rss`);
+      const text = await smartFetch(`${NITTER_INSTANCE}/${username}/rss`);
       const xml = new DOMParser().parseFromString(text, 'text/xml');
       const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
       xml.querySelectorAll('item').forEach(item => {
         container.appendChild(buildTweetCard(item, { username, avatarUrl: avatar }));
-        added++;
       });
-    } catch (e) {}
-    if (!added && window.Android) {
-      try {
-        const frags = (await nativeFetchPage(`${NITTER_INSTANCE}/${username}`)).split('\u0001').filter(Boolean);
-        frags.forEach(f => { const en = fragmentEntry(f); if (en) { container.appendChild(en.card); added++; } });
-      } catch (e) {}
-    }
-    if (!added) {
+    } catch (e) {
       const d = document.createElement('div');
       d.className = 'error';
       d.textContent = `Failed to load @${username}. Nitter might be down.`;
@@ -278,7 +282,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  /* ---------- Channel view ---------- */
+  /* ---------- CHANNEL VIEW ---------- */
   async function openChannel(username) {
     const handle = (username || '').replace('@', '').trim();
     if (!handle) return;
@@ -288,27 +292,20 @@ document.addEventListener('DOMContentLoaded', () => {
     switchView('channel');
     channelChip.textContent = '@' + handle;
     channelContainer.innerHTML = '<div class="loader">Loading @' + escapeHtml(handle) + '…</div>';
-    let added = 0;
     try {
-      const text = await rssFetch(`${NITTER_INSTANCE}/${handle}/rss`);
+      const text = await smartFetch(`${NITTER_INSTANCE}/${handle}/rss`);
       const xml = new DOMParser().parseFromString(text, 'text/xml');
       const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
+      const items = xml.querySelectorAll('item');
       channelContainer.innerHTML = '';
-      xml.querySelectorAll('item').forEach(item => {
-        channelContainer.appendChild(buildTweetCard(item, { username: handle, avatarUrl: avatar }));
-        added++;
-      });
-    } catch (e) { channelContainer.innerHTML = ''; }
-    if (!added && window.Android) {
-      try {
-        const frags = (await nativeFetchPage(`${NITTER_INSTANCE}/${handle}`)).split('\u0001').filter(Boolean);
-        frags.forEach(f => { const en = fragmentEntry(f); if (en) { channelContainer.appendChild(en.card); added++; } });
-      } catch (e) {}
+      if (!items.length) { channelContainer.innerHTML = '<p class="empty-state">No posts found.</p>'; return; }
+      items.forEach(item => channelContainer.appendChild(buildTweetCard(item, { username: handle, avatarUrl: avatar })));
+    } catch (e) {
+      channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '. Nitter might be down.</div>';
     }
-    if (!added) channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '.</div>';
   }
 
-  /* ---------- Search ---------- */
+  /* ---------- IN-APP SEARCH ---------- */
   async function openSearch(query) {
     if (!query) return;
     currentSearchQuery = query;
@@ -318,10 +315,14 @@ document.addEventListener('DOMContentLoaded', () => {
     channelChip.textContent = '🔍 ' + query;
     channelContainer.innerHTML = '<div class="loader">Searching ' + escapeHtml(query) + '…</div>';
 
+    const list = [NITTER_INSTANCE, ...INSTANCES.filter(i => i !== NITTER_INSTANCE)];
     const q = encodeURIComponent(query);
+
     let fragments = [];
+    let rssItems = [];
     let lastRaw = '';
 
+    // 1) Hidden real-Chromium WebView (passes anti-bot challenges)
     if (window.Android) {
       try {
         const raw = await nativeFetchPage(`${NITTER_INSTANCE}/search?f=tweets&q=${q}`);
@@ -330,11 +331,51 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (e) {}
     }
 
+    // 2) Search RSS across instances
+    if (!fragments.length) {
+      for (const inst of list) {
+        try {
+          const xmlText = await smartFetch(`${inst}/search/rss?f=tweets&q=${q}`);
+          lastRaw = xmlText;
+          const xml = new DOMParser().parseFromString(xmlText, 'text/xml');
+          const items = xml.querySelectorAll('item');
+          if (items.length) { rssItems = Array.from(items); break; }
+        } catch (e) { lastRaw = 'ERR: ' + e.message; }
+      }
+    }
+
+    // 3) HTML scrape across instances
+    if (!fragments.length && !rssItems.length) {
+      for (const inst of list) {
+        try {
+          const html = await smartFetch(`${inst}/search?f=tweets&q=${q}`);
+          lastRaw = html;
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          let nodes = doc.querySelectorAll('.timeline-item');
+          if (!nodes.length) nodes = doc.querySelectorAll('.tweet-body');
+          if (nodes.length) { fragments = Array.from(nodes).map(n => n.outerHTML); break; }
+        } catch (e) {}
+      }
+    }
+
     channelContainer.innerHTML = '';
-    fragments.forEach(f => {
-      const en = fragmentEntry(f);
-      if (en) channelContainer.appendChild(en.card);
-    });
+
+    if (rssItems.length) {
+      rssItems.forEach(item => {
+        const creatorNode = item.getElementsByTagName('dc:creator')[0] || item.getElementsByTagName('creator')[0];
+        const handle = (creatorNode ? creatorNode.textContent : '').replace('@', '').trim() || 'unknown';
+        channelContainer.appendChild(buildTweetCard(item, { username: handle }));
+      });
+    } else if (fragments.length) {
+      fragments.forEach(frag => {
+        const doc = new DOMParser().parseFromString(frag, 'text/html');
+        const node = doc.body ? doc.body.firstElementChild : null;
+        if (node) {
+          const card = buildSearchCard(node);
+          if (card) channelContainer.appendChild(card);
+        }
+      });
+    }
 
     if (!channelContainer.children.length) {
       const snippet = (lastRaw || 'no response').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
@@ -342,25 +383,6 @@ document.addEventListener('DOMContentLoaded', () => {
         '<p class="empty-state">No posts found for ' + escapeHtml(query) + '.</p>' +
         '<div class="error" style="text-align:left; font-size:11px; word-break:break-all;">DEBUG → ' + escapeHtml(snippet) + '</div>';
     }
-  }
-
-  /* ---------- Scrape helpers ---------- */
-  function fragmentEntry(frag) {
-    const doc = new DOMParser().parseFromString(frag, 'text/html');
-    const node = doc.body ? doc.body.firstElementChild : null;
-    if (!node) return null;
-    const card = buildSearchCard(node);
-    if (!card) return null;
-    const dateEl = node.querySelector('.tweet-date');
-    return { dateMs: Date.parse(dateEl?.getAttribute('title') || '') || 0, card };
-  }
-
-  async function pool(tasks, limit) {
-    let i = 0;
-    const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
-      while (i < tasks.length) { const idx = i++; await tasks[idx](); }
-    });
-    await Promise.all(workers);
   }
 
   function buildSearchCard(node) {
@@ -422,13 +444,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (av) av.addEventListener('error', () => { av.outerHTML = fallbackAvatarHtml(creator); });
     card.querySelector('.tweet-user').addEventListener('click', () => openChannel(username));
     if (isVideo) {
-      const mc = card.querySelector('.media-container');
-      if (mc) mc.addEventListener('click', function () { handleVideoPlayback(this); });
+      card.querySelector('.media-container')?.addEventListener('click', function () { handleVideoPlayback(this); });
     }
     return card;
   }
 
-  /* ---------- Categories & Trending ---------- */
+  /* ---------- CATEGORIES ---------- */
   function categoryFromLabel(label) {
     if (label.includes('AI')) return 'ai';
     if (label.includes('Stocks')) return 'stocks';
@@ -453,8 +474,8 @@ document.addEventListener('DOMContentLoaded', () => {
     return channels;
   }
 
-    async function loadTrends() {
-    const category = trendSelect.value || 'world';
+  async function loadTrends() {
+    const category = trendSelect.value || 'news';
     const channels = getCuratedChannels(category);
 
     trendContainer.innerHTML = '';
@@ -465,48 +486,46 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const loader = document.createElement('div');
     loader.className = 'loader';
-    loader.textContent = `Loading ${CAT_LABEL[category]}… 0/${channels.length}`;
+    loader.textContent = `Fetching ${CAT_LABEL[category]}… 0/${channels.length}`;
     trendContainer.appendChild(loader);
 
+    const collected = [];
     let done = 0;
-    let loaded = 0;
 
-    // ✅ Sequential fetch: one channel at a time, render immediately, skip failures
-    for (const ch of channels) {
-      loader.textContent = `Loading ${CAT_LABEL[category]}… ${done}/${channels.length} (✓ ${loaded})`;
+    await Promise.all(channels.map(async ch => {
       try {
-        const text = await rssFetch(`${NITTER_INSTANCE}/${ch.handle}/rss`);
+        const text = await smartFetch(`${NITTER_INSTANCE}/${ch.handle}/rss`);
         const xml = new DOMParser().parseFromString(text, 'text/xml');
         if (!xml.querySelector('parsererror')) {
           const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
-          const items = xml.querySelectorAll('item');
-          if (items.length) {
-            const fragment = document.createDocumentFragment();
-            [...items].slice(0, 3).forEach(item => {
-              fragment.appendChild(buildTweetCard(item, { username: ch.handle, avatarUrl: avatar, cat: ch.cat }));
-            });
-            trendContainer.appendChild(fragment);
-            loaded++;
-          }
+          [...xml.querySelectorAll('item')].slice(0, 3).forEach(item => {
+            collected.push({ item, username: ch.handle, avatarUrl: avatar, cat: ch.cat });
+          });
         }
       } catch (e) {}
       done++;
-    }
+      loader.textContent = `Fetching ${CAT_LABEL[category]}… ${done}/${channels.length}`;
+    }));
 
     loader.remove();
 
-    if (!loaded) {
+    collected.sort((a, b) =>
+      new Date(b.item.querySelector('pubDate')?.textContent || 0) -
+      new Date(a.item.querySelector('pubDate')?.textContent || 0));
+
+    if (!collected.length) {
       const err = document.createElement('div');
       err.className = 'error';
-      err.textContent = 'Couldn\'t fetch any channel. Nitter might be down.';
+      err.textContent = 'Couldn\'t fetch any channel in this category. Nitter might be down.';
       trendContainer.appendChild(err);
       return;
     }
 
+    collected.forEach(c => trendContainer.appendChild(buildTweetCard(c.item, c)));
     header.innerHTML = `🔥 ${CAT_LABEL[category]} — latest from ${channels.length} channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
   }
 
-  /* ---------- Card builder ---------- */
+  /* ---------- CARD BUILDER ---------- */
   function buildTweetCard(item, { username, avatarUrl = '', cat = '' }) {
     const title = item.querySelector('title')?.textContent || '';
     const creatorNode = item.getElementsByTagName('dc:creator')[0] || item.getElementsByTagName('creator')[0];
@@ -516,6 +535,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const link = item.querySelector('link')?.textContent || '#';
     const tweetId = item.querySelector('guid')?.textContent || '';
 
+    // Nitter URL → original X post URL
     let xUrl = link;
     try {
       const u = new URL(link);
@@ -578,7 +598,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return card;
   }
 
-  /* ---------- Text helpers ---------- */
+  /* ---------- HELPERS ---------- */
   function linkify(escapedText) {
     return escapedText.replace(/[#@][A-Za-z0-9_]+/g, (m) => {
       if (m.startsWith('#')) {
@@ -598,6 +618,8 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (tag === 'a') {
           const rawHref = child.getAttribute('href') || '#';
           const inner = richTextHtml(child);
+
+          // Normalize relative OR absolute Nitter URLs to an internal path
           let path = null;
           if (rawHref.startsWith('/')) {
             path = rawHref;
@@ -608,6 +630,7 @@ document.addEventListener('DOMContentLoaded', () => {
               if (u.host === niHost || u.host.endsWith('.' + niHost)) path = u.pathname + u.search;
             } catch (e) {}
           }
+
           if (path && path.includes('/search?q=')) {
             let q = '';
             try { q = decodeURIComponent(path.split('/search?q=')[1].split('&')[0]); } catch (e) {}
@@ -649,28 +672,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
-  /* ---------- Translation ---------- */
+  /* ========== TRANSLATION ========== */
   async function translateContent(contentEl) {
     const paragraphs = contentEl.querySelectorAll('.tweet-paragraph');
     if (!paragraphs.length) return;
+
     const results = await Promise.all(
       Array.from(paragraphs).map(async p => {
         const originalHtml = p.innerHTML;
         const plainText = p.textContent.trim();
         if (!plainText) return originalHtml;
         try {
-          return `<span class="translated-tag">EN</span> ${escapeHtml(await translateText(plainText))}`;
+          const translated = await translateText(plainText);
+          return `<span class="translated-tag">EN</span> ${linkify(escapeHtml(translated))}`;
         } catch (e) {
           return originalHtml;
         }
       })
     );
+
     contentEl.innerHTML = results.map(h => `<p class="tweet-paragraph">${h}</p>`).join('');
   }
 
   async function translateText(text) {
     const MAX = 500;
     if (text.length <= MAX) return await translateChunk(text);
+
     const chunks = [];
     let remaining = text;
     while (remaining.length > MAX) {
@@ -682,12 +709,14 @@ document.addEventListener('DOMContentLoaded', () => {
       remaining = remaining.slice(cut + 1).trimStart();
     }
     if (remaining) chunks.push(remaining);
+
     const out = [];
     for (const c of chunks) out.push(await translateChunk(c));
     return out.join(' ');
   }
 
   async function translateChunk(text) {
+    // 1) Google free endpoint (auto-detect)
     try {
       const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&dj=1&q=' + encodeURIComponent(text);
       const data = JSON.parse(await smartFetch(url));
@@ -696,14 +725,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (out.trim()) return out;
       }
     } catch (e) {}
+
+    // 2) Fallback: Lingva
     try {
       const data = JSON.parse(await smartFetch('https://lingva.ml/api/v1/auto/en/' + encodeURIComponent(text)));
       if (data && data.translation) return data.translation;
     } catch (e) {}
+
     throw new Error('translation failed');
   }
 
-  /* ---------- Video ---------- */
+  /* ========== VIDEO ========== */
   async function handleVideoPlayback(container) {
     const tid = container.getAttribute('data-tweet-id');
     const uname = container.getAttribute('data-username');
@@ -715,6 +747,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       let candidates = [];
+
       try {
         const rawHtml = await smartFetch(fallbackUrl);
         const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
@@ -746,6 +779,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (candidates.length) injectVideoPlayer(container, candidates, poster, fallbackUrl);
       else showFallback(container, fallbackUrl, '🎬 Video not found. Click to open on Nitter.');
     } catch (err) {
+      console.error(err);
       showFallback(container, fallbackUrl, '🎬 Error loading video. Click to open on Nitter.');
     }
   }
@@ -773,11 +807,14 @@ document.addEventListener('DOMContentLoaded', () => {
       if (raw.startsWith('http') && (raw.includes('.mp4') || raw.includes('.m3u8') || raw.includes('video.twimg'))) pushUnique(candidates, raw);
       if (raw.startsWith('/') && (raw.includes('.mp4') || raw.includes('.m3u8') || raw.includes('/video/') || raw.includes('/vid/'))) pushUnique(candidates, NITTER_INSTANCE + raw);
     };
+
     doc.querySelectorAll('video source[src], video[src], video[data-url], a.video-download[href], a[href*="ext_tw_video"]').forEach(el => {
       pushRaw(el.getAttribute('src') || el.getAttribute('data-url') || el.getAttribute('href'));
     });
+
     const urlRegex = /https?:\/\/[^"'\s<>]+?(?:video\.twimg\.com|ext_tw_video)[^"'\s<>]*/g;
     (rawHtml.match(urlRegex) || []).forEach(m => pushRaw(m.replace(/[.,;:]+$/, '')));
+
     return candidates;
   }
 
@@ -820,12 +857,14 @@ document.addEventListener('DOMContentLoaded', () => {
     video.controls = true; video.playsInline = true;
     if (poster) video.poster = poster;
     video.style.cssText = 'max-width:100%; border-radius:12px; display:block; background:black;';
+
     let i = 0;
     video.addEventListener('error', () => {
       i++;
       if (i < candidates.length) { video.src = candidates[i]; video.load(); video.play().catch(() => {}); }
       else showFallback(container, fallbackUrl, '🎬 Playback failed. Click to open on Nitter.');
     });
+
     video.src = candidates[0];
     container.appendChild(video);
     video.play().catch(() => {});
@@ -836,9 +875,10 @@ document.addEventListener('DOMContentLoaded', () => {
     container.onclick = () => window.open(url, '_blank');
   }
 
-  /* ---------- STARTUP ---------- */
-  switchView('trends');
-  trendsLoaded = true;
-  trendContainer.innerHTML = '<div class="loader">Loading World News…</div>';
-  loadTrends();
+  /* ---------- INIT ---------- */
+  resolveInstance().then(() => {
+    switchView('trends');
+    trendsLoaded = true;
+    loadTrends();
+  });
 });
