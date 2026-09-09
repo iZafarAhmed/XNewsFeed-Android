@@ -41,16 +41,6 @@ function nativeFetch(url) {
   });
 }
 
-// 🛡️ Ask the human to pass the Cloudflare check once (cookie then unlocks everything)
-function requestVerification(url) {
-  return new Promise((resolve) => {
-    if (!window.Android) return resolve(false);
-    window.__onVerify = (ok) => { delete window.__onVerify; resolve(!!ok); };
-    window.Android.openVerifier(url);
-    setTimeout(() => { if (window.__onVerify) { delete window.__onVerify; resolve(false); } }, 120000);
-  });
-}
-
 function nativeFetchPage(url) {
   return new Promise((resolve, reject) => {
     const id = 'p' + (++_cbId);
@@ -75,11 +65,10 @@ async function smartFetch(url) {
   return res.text();
 }
 
-// ✅ RSS fetch: hidden real browser first (beats anti-bot), then normal paths
 function looksLikeRss(t) { return !!t && t.includes('<rss'); }
 
 async function fetchRss(url) {
-  // 1) Hidden real browser (passes anti-bot)
+  // 1) Hidden real browser (passes anti-bot when cookies exist)
   if (window.Android) {
     try {
       const t = await nativeFetchPage(url);
@@ -91,7 +80,7 @@ async function fetchRss(url) {
     const t = await smartFetch(url);
     if (looksLikeRss(t)) return t;
   } catch (e) {}
-  // 3) Public reader proxies (different IPs & fingerprints)
+  // 3) Public reader proxies
   const mirrors = [
     'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
     'https://corsproxy.io/?url=' + encodeURIComponent(url)
@@ -105,6 +94,16 @@ async function fetchRss(url) {
     } catch (e) {}
   }
   throw new Error('all rss paths failed');
+}
+
+// 🛡️ Human passes the Cloudflare check once (cookie then unlocks hidden browsers)
+function requestVerification(url) {
+  return new Promise((resolve) => {
+    if (!window.Android) return resolve(false);
+    window.__onVerify = (ok) => { delete window.__onVerify; resolve(!!ok); };
+    window.Android.openVerifier(url);
+    setTimeout(() => { if (window.__onVerify) { delete window.__onVerify; resolve(false); } }, 120000);
+  });
 }
 
 /* ========== APP ========== */
@@ -122,6 +121,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const popularSelect = document.getElementById('popular-select');
   const refreshBtn = document.getElementById('refresh-btn');
   const themeBtn = document.getElementById('theme-btn');
+  const verifyBtn = document.getElementById('verify-btn');
   const viewFeed = document.getElementById('view-feed');
   const viewTrends = document.getElementById('view-trends');
   const viewChannel = document.getElementById('view-channel');
@@ -134,7 +134,7 @@ document.addEventListener('DOMContentLoaded', () => {
   ];
   let NITTER_INSTANCE = INSTANCES[0];
 
-    async function resolveInstance() {
+  async function resolveInstance() {
     let saved = '';
     await new Promise(res => store.get(['activeInstance'], r => { saved = r.activeInstance || ''; res(); }));
     const list = saved ? [saved, ...INSTANCES.filter(i => i !== saved)] : INSTANCES;
@@ -148,7 +148,6 @@ document.addEventListener('DOMContentLoaded', () => {
           return inst;
         } catch (e) {}
       }
-      // All automated paths failed → human verifies once, then retry with the saved cookie
       if (round === 0 && window.Android) {
         const ok = await requestVerification(list[0]);
         if (!ok) break;
@@ -225,7 +224,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  /* ---------- THEME ---------- */
+  /* ---------- THEME + VERIFY ---------- */
   store.get(['darkMode'], (r) => applyTheme(!!r.darkMode));
   themeBtn.addEventListener('click', () => {
     const dark = !document.body.classList.contains('dark');
@@ -237,7 +236,6 @@ document.addEventListener('DOMContentLoaded', () => {
     themeBtn.textContent = dark ? '☀️' : '🌙';
   }
 
-    const verifyBtn = document.getElementById('verify-btn');
   if (verifyBtn) verifyBtn.addEventListener('click', async () => {
     const ok = await requestVerification(NITTER_INSTANCE);
     if (ok) {
@@ -327,6 +325,11 @@ document.addEventListener('DOMContentLoaded', () => {
         container.appendChild(buildTweetCard(item, { username, avatarUrl: avatar }));
       });
     } catch (e) {
+      try {
+        const tweets = await fetchSyndicationTweets(username);
+        tweets.forEach(t => container.appendChild(buildCardFromTweet(t)));
+        return;
+      } catch (e2) {}
       const d = document.createElement('div');
       d.className = 'error';
       d.textContent = `Failed to load @${username}. Nitter might be down.`;
@@ -353,7 +356,13 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!items.length) { channelContainer.innerHTML = '<p class="empty-state">No posts found.</p>'; return; }
       items.forEach(item => channelContainer.appendChild(buildTweetCard(item, { username: handle, avatarUrl: avatar })));
     } catch (e) {
-      channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '. Nitter might be down.</div>';
+      try {
+        const tweets = await fetchSyndicationTweets(handle);
+        channelContainer.innerHTML = '';
+        tweets.forEach(t => channelContainer.appendChild(buildCardFromTweet(t)));
+        return;
+      } catch (e2) {}
+      channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '.</div>';
     }
   }
 
@@ -374,7 +383,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let rssItems = [];
     let lastRaw = '';
 
-    // 1) Hidden real-Chromium WebView (passes anti-bot challenges)
     if (window.Android) {
       try {
         const raw = await nativeFetchPage(`${NITTER_INSTANCE}/search?f=tweets&q=${q}`);
@@ -383,7 +391,6 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (e) {}
     }
 
-    // 2) Search RSS across instances (via hidden browser too)
     if (!fragments.length) {
       for (const inst of list) {
         try {
@@ -396,7 +403,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // 3) HTML scrape across instances
     if (!fragments.length && !rssItems.length) {
       for (const inst of list) {
         try {
@@ -501,6 +507,88 @@ document.addEventListener('DOMContentLoaded', () => {
     return card;
   }
 
+  /* ---------- CLOUDFLARE-FREE BACKBONE (official Twitter embed service) ---------- */
+  async function fetchSyndicationTweets(username) {
+    const url = 'https://syndication.twitter.com/srv/timeline-profile/screen-name/' + encodeURIComponent(username);
+    const html = await smartFetch(url);
+    const m = html.match(/<script id="__NEXT_DATA__" type="application\/json"[^>]*>([\s\S]*?)<\/script>/);
+    if (!m) throw new Error('no syndication data');
+    const data = JSON.parse(m[1]);
+    const entries = (data && data.props && data.props.pageProps && data.props.pageProps.timeline && data.props.pageProps.timeline.entries) || [];
+    const tweets = [];
+    entries.forEach(e => {
+      const t = e && e.content && e.content.tweet;
+      if (t) tweets.push(t);
+    });
+    if (!tweets.length) throw new Error('empty syndication timeline');
+    return tweets;
+  }
+
+  function buildCardFromTweet(t, cat) {
+    const user = t.user || {};
+    const username = user.screen_name || 'unknown';
+    const creator = '@' + username;
+    const text = t.full_text || t.text || '';
+    const tweetId = t.id_str || String(t.id || '');
+    const createdAt = t.created_at ? new Date(t.created_at) : new Date();
+    const xUrl = `https://x.com/${username}/status/${tweetId}`;
+    const avatarUrl = user.profile_image_url_https || '';
+
+    let mediaHtml = '';
+    let videoMp4 = '';
+    let poster = '';
+    const mediaArr = (t.extended_entities && t.extended_entities.media) || (t.entities && t.entities.media) || [];
+    if (mediaArr.length) {
+      const m0 = mediaArr[0];
+      if (m0.type === 'photo') {
+        poster = m0.media_url_https || '';
+        mediaHtml = `<img src="${escapeAttr(poster)}" class="tweet-image" alt="Tweet image">`;
+      } else if (m0.type === 'video' || m0.type === 'animated_gif') {
+        const variants = (m0.video_info && m0.video_info.variants) || [];
+        const mp4s = variants.filter(v => v.content_type === 'video/mp4').sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+        videoMp4 = mp4s.length ? mp4s[0].url : '';
+        poster = m0.media_url_https || '';
+        mediaHtml = `<div class="media-container" data-video-mp4="${escapeAttr(videoMp4)}" data-tweet-id="${tweetId}" data-username="${username}">
+                       <img src="${escapeAttr(poster)}" class="tweet-image" alt="Video thumbnail">
+                       <div class="play-btn-overlay">▶ Play Video</div>
+                     </div>`;
+      }
+    }
+
+    const card = document.createElement('div');
+    card.className = 'tweet-card';
+    card.setAttribute('data-user', username);
+
+    const avatarHtml = avatarUrl ? `<img class="avatar" src="${escapeAttr(avatarUrl)}" alt="">` : fallbackAvatarHtml(creator);
+    const removeBtn = `<button class="remove-btn" data-user="${username}" title="Remove ${username}">❌</button>`;
+    const translateBtn = `<button class="translate-btn" title="Translate to English">🌐</button>`;
+    const chip = cat ? `<span class="cat-chip" title="${CAT_LABEL[cat] || ''}">${CAT_EMOJI[cat] || '📰'}</span>` : '';
+
+    card.innerHTML = `
+      <div class="tweet-header">
+        <div class="tweet-user">${avatarHtml}<strong>${escapeHtml(creator)}</strong>${chip}</div>
+        <div style="display:flex; align-items:center; gap:6px;">
+          ${translateBtn}
+          ${removeBtn}
+          <span class="tweet-date" title="${createdAt.toLocaleString()}">${getRelativeTime(createdAt.toISOString())}</span>
+        </div>
+      </div>
+      <div class="tweet-content"><p class="tweet-paragraph">${linkify(escapeHtml(text))}</p></div>
+      ${mediaHtml}
+      <a href="${xUrl}" target="_blank" class="tweet-link">View on X (Twitter) ↗</a>`;
+
+    card.querySelector('.tweet-user').addEventListener('click', () => openChannel(username));
+    const av = card.querySelector('img.avatar');
+    if (av) av.addEventListener('error', () => { av.outerHTML = fallbackAvatarHtml(creator); });
+    const mc = card.querySelector('.media-container');
+    if (mc) mc.addEventListener('click', function () {
+      const direct = this.getAttribute('data-video-mp4');
+      if (direct) injectVideoPlayer(this, [direct], poster, xUrl);
+      else handleVideoPlayback(this);
+    });
+    return card;
+  }
+
   /* ---------- CATEGORIES ---------- */
   function categoryFromLabel(label) {
     if (label.includes('AI')) return 'ai';
@@ -526,6 +614,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return channels;
   }
 
+  /* ---------- TRENDING ---------- */
   async function loadTrends() {
     const category = trendSelect.value || 'world';
     const channels = getCuratedChannels(category);
@@ -543,22 +632,34 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const collected = [];
     let done = 0;
-
-        let firstErr = '';
+    let firstErr = '';
     let cursor = 0;
+
     async function runner() {
       while (cursor < channels.length) {
         const ch = channels[cursor++];
+        let ok = false;
         try {
           const text = await fetchRss(`${NITTER_INSTANCE}/${ch.handle}/rss`);
           const xml = new DOMParser().parseFromString(text, 'text/xml');
           if (!xml.querySelector('parsererror')) {
             const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
             [...xml.querySelectorAll('item')].slice(0, 3).forEach(item => {
-              collected.push({ item, username: ch.handle, avatarUrl: avatar, cat: ch.cat });
+              const ms = new Date(item.querySelector('pubDate')?.textContent || 0).getTime();
+              collected.push({ ms, el: buildTweetCard(item, { username: ch.handle, avatarUrl: avatar, cat: ch.cat }) });
             });
+            ok = true;
           }
         } catch (e) { firstErr = firstErr || (e && e.message) || 'fetch error'; }
+        if (!ok) {
+          try {
+            const tweets = await fetchSyndicationTweets(ch.handle);
+            tweets.slice(0, 3).forEach(t => {
+              const ms = new Date(t.created_at || 0).getTime();
+              collected.push({ ms, el: buildCardFromTweet(t, ch.cat) });
+            });
+          } catch (e2) {}
+        }
         done++;
         loader.textContent = `Fetching ${CAT_LABEL[category]}… ${done}/${channels.length}`;
       }
@@ -567,9 +668,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     loader.remove();
 
-    collected.sort((a, b) =>
-      new Date(b.item.querySelector('pubDate')?.textContent || 0) -
-      new Date(a.item.querySelector('pubDate')?.textContent || 0));
+    collected.sort((a, b) => b.ms - a.ms);
 
     if (!collected.length) {
       const err = document.createElement('div');
@@ -579,11 +678,11 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    collected.forEach(c => trendContainer.appendChild(buildTweetCard(c.item, c)));
+    collected.forEach(c => trendContainer.appendChild(c.el));
     header.innerHTML = `🔥 ${CAT_LABEL[category]} — latest from ${channels.length} channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
   }
 
-  /* ---------- CARD BUILDER ---------- */
+  /* ---------- CARD BUILDER (RSS) ---------- */
   function buildTweetCard(item, { username, avatarUrl = '', cat = '' }) {
     const title = item.querySelector('title')?.textContent || '';
     const creatorNode = item.getElementsByTagName('dc:creator')[0] || item.getElementsByTagName('creator')[0];
