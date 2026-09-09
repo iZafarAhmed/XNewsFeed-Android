@@ -54,17 +54,28 @@ function nativeFetchPage(url) {
 
 async function smartFetch(url) {
   if (window.Android) {
-    // 1) WebView proxy (Chromium network stack)
     try {
       const res = await fetch('https://proxy.xnewsfeed.local/' + encodeURIComponent(url));
       if (res.ok) return await res.text();
     } catch (e) {}
-    // 2) Java bridge fallback
     return nativeFetch(url);
   }
   const res = await fetch(url);
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.text();
+}
+
+// ✅ RSS fetch: hidden real browser first (beats anti-bot), then normal paths
+async function fetchRss(url) {
+  if (window.Android) {
+    try {
+      const t = await nativeFetchPage(url);
+      if (t && t.includes('<rss')) return t;
+    } catch (e) {}
+  }
+  const t = await smartFetch(url);
+  if (t && t.includes('<rss')) return t;
+  throw new Error('invalid rss response');
 }
 
 /* ========== APP ========== */
@@ -86,7 +97,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const viewTrends = document.getElementById('view-trends');
   const viewChannel = document.getElementById('view-channel');
 
-  /* ✅ Instance failover list */
   const INSTANCES = [
     'https://nitter.kareem.one',
     'https://nitter.net',
@@ -101,12 +111,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const list = saved ? [saved, ...INSTANCES.filter(i => i !== saved)] : INSTANCES;
     for (const inst of list) {
       try {
-        const text = await smartFetch(`${inst}/FT/rss`);
-        if (text && text.includes('<rss')) {
-          NITTER_INSTANCE = inst;
-          store.set({ activeInstance: inst });
-          return inst;
-        }
+        await fetchRss(`${inst}/FT/rss`);
+        NITTER_INSTANCE = inst;
+        store.set({ activeInstance: inst });
+        return inst;
       } catch (e) {}
     }
     NITTER_INSTANCE = list[0];
@@ -131,13 +139,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /* ---------- GLOBAL CLICK HANDLER ---------- */
   document.body.addEventListener('click', (e) => {
-    // In-app hashtag / search links
     const searchLink = e.target.closest('.in-app-search');
     if (searchLink) { e.preventDefault(); openSearch(searchLink.getAttribute('data-query')); return; }
     const userLink = e.target.closest('.in-app-user');
     if (userLink) { e.preventDefault(); openChannel(userLink.getAttribute('data-user')); return; }
 
-    // Remove user
     if (e.target.classList.contains('remove-btn')) {
       const userToRemove = e.target.getAttribute('data-user');
       store.get(['usernames'], (r) => {
@@ -149,7 +155,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // Translate tweet
     if (e.target.classList.contains('translate-btn')) {
       const btn = e.target;
       const card = btn.closest('.tweet-card');
@@ -268,7 +273,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function fetchFeed(username, container) {
     container.querySelectorAll(`.tweet-card[data-user="${username}"]`).forEach(el => el.remove());
     try {
-      const text = await smartFetch(`${NITTER_INSTANCE}/${username}/rss`);
+      const text = await fetchRss(`${NITTER_INSTANCE}/${username}/rss`);
       const xml = new DOMParser().parseFromString(text, 'text/xml');
       const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
       xml.querySelectorAll('item').forEach(item => {
@@ -293,7 +298,7 @@ document.addEventListener('DOMContentLoaded', () => {
     channelChip.textContent = '@' + handle;
     channelContainer.innerHTML = '<div class="loader">Loading @' + escapeHtml(handle) + '…</div>';
     try {
-      const text = await smartFetch(`${NITTER_INSTANCE}/${handle}/rss`);
+      const text = await fetchRss(`${NITTER_INSTANCE}/${handle}/rss`);
       const xml = new DOMParser().parseFromString(text, 'text/xml');
       const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
       const items = xml.querySelectorAll('item');
@@ -331,11 +336,11 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (e) {}
     }
 
-    // 2) Search RSS across instances
+    // 2) Search RSS across instances (via hidden browser too)
     if (!fragments.length) {
       for (const inst of list) {
         try {
-          const xmlText = await smartFetch(`${inst}/search/rss?f=tweets&q=${q}`);
+          const xmlText = await fetchRss(`${inst}/search/rss?f=tweets&q=${q}`);
           lastRaw = xmlText;
           const xml = new DOMParser().parseFromString(xmlText, 'text/xml');
           const items = xml.querySelectorAll('item');
@@ -475,7 +480,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function loadTrends() {
-    const category = trendSelect.value || 'news';
+    const category = trendSelect.value || 'world';
     const channels = getCuratedChannels(category);
 
     trendContainer.innerHTML = '';
@@ -492,9 +497,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const collected = [];
     let done = 0;
 
-    await Promise.all(channels.map(async ch => {
+    await Promise.all(channels.map(async (ch, idx) => {
+      await new Promise(r => setTimeout(r, idx * 150)); // stagger hidden browsers
       try {
-        const text = await smartFetch(`${NITTER_INSTANCE}/${ch.handle}/rss`);
+        const text = await fetchRss(`${NITTER_INSTANCE}/${ch.handle}/rss`);
         const xml = new DOMParser().parseFromString(text, 'text/xml');
         if (!xml.querySelector('parsererror')) {
           const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
@@ -535,7 +541,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const link = item.querySelector('link')?.textContent || '#';
     const tweetId = item.querySelector('guid')?.textContent || '';
 
-    // Nitter URL → original X post URL
     let xUrl = link;
     try {
       const u = new URL(link);
@@ -619,7 +624,6 @@ document.addEventListener('DOMContentLoaded', () => {
           const rawHref = child.getAttribute('href') || '#';
           const inner = richTextHtml(child);
 
-          // Normalize relative OR absolute Nitter URLs to an internal path
           let path = null;
           if (rawHref.startsWith('/')) {
             path = rawHref;
@@ -716,7 +720,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function translateChunk(text) {
-    // 1) Google free endpoint (auto-detect)
     try {
       const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&dj=1&q=' + encodeURIComponent(text);
       const data = JSON.parse(await smartFetch(url));
@@ -726,7 +729,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } catch (e) {}
 
-    // 2) Fallback: Lingva
     try {
       const data = JSON.parse(await smartFetch('https://lingva.ml/api/v1/auto/en/' + encodeURIComponent(text)));
       if (data && data.translation) return data.translation;
