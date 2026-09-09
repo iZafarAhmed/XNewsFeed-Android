@@ -46,14 +46,16 @@ public class MainActivity extends Activity {
             "return '';})()";
 
     // Detects when a Cloudflare challenge has been PASSED in the visible verifier
+    // Detects when a Cloudflare challenge has been PASSED in the visible verifier
     private static final String VERIFY_JS =
             "(function(){" +
+            "if(document.querySelector('#cf-turnstile,#challenge-form,.cf-browser-verification,.g-recaptcha'))return '';" +
             "var t=(document.body&&document.body.innerText)||'';" +
-            "if(/Verifying your browser|Just a moment|Checking your browser|Attention required/i.test(t))return '';" +
+            "if(/Verifying|Just a moment|Checking your browser|Attention required|Verify you are human/i.test(t))return '';" +
             "var root=document.documentElement;" +
             "if(root&&root.nodeName&&root.nodeName.toLowerCase()==='rss')return 'ok';" +
             "if(document.querySelector('rss'))return 'ok';" +
-            "if(document.querySelector('.timeline-item,.tweet-body,.main-content,nav,.content'))return 'ok';" +
+            "if(document.querySelector('.timeline-item,.tweet-body,.tweet-header,.profile-tabs'))return 'ok';" +
             "return '';})()";
 
     private FrameLayout root;
