@@ -453,7 +453,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return channels;
   }
 
-  async function loadTrends() {
+    async function loadTrends() {
     const category = trendSelect.value || 'world';
     const channels = getCuratedChannels(category);
 
@@ -465,39 +465,37 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const loader = document.createElement('div');
     loader.className = 'loader';
-    loader.textContent = `Fetching ${CAT_LABEL[category]}… 0/${channels.length}`;
+    loader.textContent = `Loading ${CAT_LABEL[category]}… 0/${channels.length}`;
     trendContainer.appendChild(loader);
 
-    const entries = [];
     let done = 0;
+    let loaded = 0;
 
-    const tasks = channels.map(ch => async () => {
-      const local = [];
+    // ✅ Sequential fetch: one channel at a time, render immediately, skip failures
+    for (const ch of channels) {
+      loader.textContent = `Loading ${CAT_LABEL[category]}… ${done}/${channels.length} (✓ ${loaded})`;
       try {
         const text = await rssFetch(`${NITTER_INSTANCE}/${ch.handle}/rss`);
         const xml = new DOMParser().parseFromString(text, 'text/xml');
         if (!xml.querySelector('parsererror')) {
           const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
-          [...xml.querySelectorAll('item')].slice(0, 3).forEach(item => {
-            local.push({
-              dateMs: Date.parse(item.querySelector('pubDate')?.textContent || '') || 0,
-              card: buildTweetCard(item, { username: ch.handle, avatarUrl: avatar, cat: ch.cat })
+          const items = xml.querySelectorAll('item');
+          if (items.length) {
+            const fragment = document.createDocumentFragment();
+            [...items].slice(0, 3).forEach(item => {
+              fragment.appendChild(buildTweetCard(item, { username: ch.handle, avatarUrl: avatar, cat: ch.cat }));
             });
-          });
+            trendContainer.appendChild(fragment);
+            loaded++;
+          }
         }
       } catch (e) {}
-      entries.push(...local);
       done++;
-      loader.textContent = `Fetching ${CAT_LABEL[category]}… ${done}/${channels.length}`;
-    });
+    }
 
-    await pool(tasks, 3);
     loader.remove();
 
-    entries.sort((a, b) => b.dateMs - a.dateMs);
-    entries.forEach(en => trendContainer.appendChild(en.card));
-
-    if (!entries.length) {
+    if (!loaded) {
       const err = document.createElement('div');
       err.className = 'error';
       err.textContent = 'Couldn\'t fetch any channel. Nitter might be down.';
