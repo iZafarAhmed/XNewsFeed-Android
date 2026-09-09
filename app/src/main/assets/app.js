@@ -41,6 +41,16 @@ function nativeFetch(url) {
   });
 }
 
+// 🛡️ Ask the human to pass the Cloudflare check once (cookie then unlocks everything)
+function requestVerification(url) {
+  return new Promise((resolve) => {
+    if (!window.Android) return resolve(false);
+    window.__onVerify = (ok) => { delete window.__onVerify; resolve(!!ok); };
+    window.Android.openVerifier(url);
+    setTimeout(() => { if (window.__onVerify) { delete window.__onVerify; resolve(false); } }, 120000);
+  });
+}
+
 function nativeFetchPage(url) {
   return new Promise((resolve, reject) => {
     const id = 'p' + (++_cbId);
@@ -124,17 +134,25 @@ document.addEventListener('DOMContentLoaded', () => {
   ];
   let NITTER_INSTANCE = INSTANCES[0];
 
-  async function resolveInstance() {
+    async function resolveInstance() {
     let saved = '';
     await new Promise(res => store.get(['activeInstance'], r => { saved = r.activeInstance || ''; res(); }));
     const list = saved ? [saved, ...INSTANCES.filter(i => i !== saved)] : INSTANCES;
-    for (const inst of list) {
-      try {
-        await fetchRss(`${inst}/FT/rss`);
-        NITTER_INSTANCE = inst;
-        store.set({ activeInstance: inst });
-        return inst;
-      } catch (e) {}
+
+    for (let round = 0; round < 2; round++) {
+      for (const inst of list) {
+        try {
+          await fetchRss(`${inst}/FT/rss`);
+          NITTER_INSTANCE = inst;
+          store.set({ activeInstance: inst });
+          return inst;
+        } catch (e) {}
+      }
+      // All automated paths failed → human verifies once, then retry with the saved cookie
+      if (round === 0 && window.Android) {
+        const ok = await requestVerification(list[0]);
+        if (!ok) break;
+      } else break;
     }
     NITTER_INSTANCE = list[0];
     return NITTER_INSTANCE;
@@ -218,6 +236,16 @@ document.addEventListener('DOMContentLoaded', () => {
     document.body.classList.toggle('dark', dark);
     themeBtn.textContent = dark ? '☀️' : '🌙';
   }
+
+    const verifyBtn = document.getElementById('verify-btn');
+  if (verifyBtn) verifyBtn.addEventListener('click', async () => {
+    const ok = await requestVerification(NITTER_INSTANCE);
+    if (ok) {
+      if (currentView === 'feed') reloadFeeds();
+      else if (currentView === 'trends') loadTrends();
+      else if (currentView === 'channel') (channelMode === 'search' ? openSearch(currentSearchQuery) : openChannel(currentChannelUser));
+    }
+  });
 
   /* ---------- VIEWS / TABS ---------- */
   document.querySelectorAll('.tab').forEach(tab => {
