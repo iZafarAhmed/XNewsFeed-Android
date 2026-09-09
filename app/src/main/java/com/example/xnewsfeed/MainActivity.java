@@ -3,12 +3,14 @@ package com.example.xnewsfeed;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.os.Bundle;
+import android.view.View;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 
 import org.json.JSONObject;
 import org.json.JSONTokener;
@@ -28,18 +30,21 @@ public class MainActivity extends Activity {
     private static final String PROXY_BASE = "https://proxy.xnewsfeed.local/";
     private static final String UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
 
-    // Extracts RSS XML or tweet blocks from inside the hidden real browser.
+    // Extracts RSS XML or tweet blocks from inside the hidden real browser
     private static final String EXTRACT_JS =
             "(function(){" +
             "var root=document.documentElement;" +
             "if(root&&root.nodeName&&root.nodeName.toLowerCase()==='rss'){" +
             "return new XMLSerializer().serializeToString(root);}" +
+            "var rssEl=document.querySelector('rss');" +
+            "if(rssEl){return new XMLSerializer().serializeToString(rssEl);}" +
             "var n=document.querySelectorAll('.timeline-item');" +
             "if(!n.length){n=document.querySelectorAll('.tweet-body');}" +
             "if(n.length){var out=[];for(var i=0;i<n.length;i++){out.push(n[i].outerHTML);}" +
             "return out.join('\\u0001');}" +
             "return '';})()";
 
+    private FrameLayout root;
     private WebView webView;
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
@@ -47,7 +52,6 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Cookies ON so anti-bot challenges can complete and be remembered
         CookieManager.getInstance().setAcceptCookie(true);
 
         webView = new WebView(this);
@@ -56,7 +60,6 @@ public class MainActivity extends Activity {
         webView.getSettings().setAllowFileAccess(true);
         webView.getSettings().setMediaPlaybackRequiresUserGesture(false);
 
-        // Local proxy: lets JS fetch through a native connection when needed
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
@@ -92,7 +95,12 @@ public class MainActivity extends Activity {
         });
 
         webView.addJavascriptInterface(new Bridge(), "Android");
-        setContentView(webView);
+
+        // ✅ Root layout so hidden browsers can be ATTACHED (real viewport = passes bot checks)
+        root = new FrameLayout(this);
+        root.addView(webView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        setContentView(root);
         webView.loadUrl("file:///android_asset/index.html");
     }
 
@@ -105,7 +113,11 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ✅ FIXED: Use a final string for the lambda capture
+    private void destroyHw(final WebView hw) {
+        try { root.removeView(hw); } catch (Exception ignored) {}
+        try { hw.destroy(); } catch (Exception ignored) {}
+    }
+
     private void deliver(final String id, final String body) {
         String tempPayload;
         try {
@@ -123,7 +135,7 @@ public class MainActivity extends Activity {
 
     private class Bridge {
 
-        // ✅ Hidden REAL Chromium WebView
+        // ✅ Hidden BUT attached real Chromium WebView (invisible, full-size)
         @JavascriptInterface
         public void fetchPage(final String url, final String id) {
             webView.post(() -> {
@@ -131,9 +143,14 @@ public class MainActivity extends Activity {
                 hw.getSettings().setJavaScriptEnabled(true);
                 hw.getSettings().setDomStorageEnabled(true);
                 hw.getSettings().setUserAgentString(UA);
+
+                // Attach invisibly with real dimensions (bot checks see a normal viewport)
+                root.addView(hw, new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                hw.setVisibility(View.INVISIBLE);
+
                 final boolean[] done = {false};
 
-                // Poll every 1.5s until real content appears
                 final Runnable[] poll = new Runnable[1];
                 poll[0] = new Runnable() {
                     int attempts = 0;
@@ -153,13 +170,13 @@ public class MainActivity extends Activity {
                             if (!html.isEmpty()) {
                                 done[0] = true;
                                 deliver(id, html);
-                                hw.destroy();
-                            } else if (attempts < 15) {
-                                hw.postDelayed(poll[0], 1500);
+                                destroyHw(hw);
+                            } else if (attempts < 12) {
+                                hw.postDelayed(poll[0], 1200);
                             } else {
                                 done[0] = true;
                                 deliver(id, "");
-                                hw.destroy();
+                                destroyHw(hw);
                             }
                         });
                     }
@@ -168,18 +185,17 @@ public class MainActivity extends Activity {
                 hw.setWebViewClient(new WebViewClient() {
                     @Override
                     public void onPageFinished(WebView view, String finishedUrl) {
-                        hw.postDelayed(poll[0], 1000);
+                        hw.postDelayed(poll[0], 800);
                     }
                 });
 
-                // Hard timeout (25s)
                 hw.postDelayed(() -> {
                     if (!done[0]) {
                         done[0] = true;
                         deliver(id, "");
-                        hw.destroy();
+                        destroyHw(hw);
                     }
-                }, 25000);
+                }, 16000);
 
                 hw.loadUrl(url);
             });
