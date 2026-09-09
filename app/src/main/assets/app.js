@@ -1,4 +1,4 @@
-// app.js — X News Feed (FINAL v2 — kareem.one primary + full feature set)
+// app.js — X News Feed (FINAL v3 — kareem.one + Cloudflare verify flow)
 
 window.addEventListener('error', (e) => {
   const d = document.createElement('div');
@@ -30,6 +30,9 @@ const store = {
 let _cbId = 0;
 const _cbs = {};
 
+const CF_MARKERS = ['Performing security verification', 'security service', 'Just a moment', 'Verifying…', 'Verifying...'];
+function isCloudflare(t) { return CF_MARKERS.some(m => t && t.includes(m)); }
+
 window.__onFetch = function (id, jsonStr) {
   const cb = _cbs[id];
   if (!cb) return;
@@ -53,6 +56,14 @@ function nativeFetchUA(url, ua) {
     const id = 'f' + (++_cbId);
     _cbs[id] = { resolve, reject };
     window.Android.fetchUA(url, id, ua);
+  });
+}
+
+function nativeFetchRaw(url) {
+  return new Promise((resolve, reject) => {
+    const id = 'r' + (++_cbId);
+    _cbs[id] = { resolve, reject };
+    window.Android.fetchRaw(url, id);
   });
 }
 
@@ -88,11 +99,17 @@ async function smartFetch(url) {
 async function rssFetch(url) {
   if (window.Android) {
     try {
-      return await withTimeout(nativeFetchUA(url, window.__RSS_UA || 'XNewsFeed/1.0'), 12000);
+      const t = await withTimeout(nativeFetchUA(url, window.__RSS_UA || 'XNewsFeed/1.0'), 6000);
+      if (t && t.includes('<rss')) return t;
     } catch (e) {}
-    return withTimeout(nativeFetch(url), 12000);
+    try {
+      const t2 = await withTimeout(nativeFetchRaw(url), 20000);
+      if (t2 && t2.includes('<rss')) return t2;
+      if (isCloudflare(t2)) throw new Error('cloudflare');
+      throw new Error(t2 ? ('not-xml: ' + t2.slice(0, 80)) : 'empty-response');
+    } catch (e) { throw e; }
   }
-  const res = await withTimeout(fetch(url), 12000);
+  const res = await withTimeout(fetch(url), 8000);
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.text();
 }
@@ -124,10 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let NITTER_INSTANCE = 'https://nitter.kareem.one';
   let RSS_INSTANCE = 'https://nitter.kareem.one';
   const INSTANCE_LIST = [
-    { web: 'https://nitter.kareem.one', rss: 'https://nitter.kareem.one' },
-    { web: 'https://xcancel.com', rss: 'https://rss.xcancel.com' },
-    { web: 'https://nitter.privacyredirect.com', rss: 'https://nitter.privacyredirect.com' },
-    { web: 'https://nitter.net', rss: 'https://nitter.net' }
+    { web: 'https://nitter.kareem.one', rss: 'https://nitter.kareem.one' }
   ];
   const UA_LIST = [
     'XNewsFeed/1.0',
@@ -137,6 +151,8 @@ document.addEventListener('DOMContentLoaded', () => {
     'Tiny Tiny RSS/24.02 (http://tt-rss.org/)'
   ];
   window.__RSS_UA = UA_LIST[0];
+
+  function openVerifyBrowser() { window.location.href = NITTER_INSTANCE + '/'; }
 
   const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻', crypto: '🪙', business: '💼', science: '🔬', world: '🌐' };
   const CAT_LABEL = {
@@ -156,11 +172,26 @@ document.addEventListener('DOMContentLoaded', () => {
   /* ---------- Instance probe ---------- */
   async function probeInstance() {
     for (const entry of INSTANCE_LIST) {
+      for (const ua of UA_LIST) {
+        try {
+          const text = window.Android
+            ? await withTimeout(nativeFetchUA(entry.rss + '/MiddleEastEye/rss', ua), 5000)
+            : await (await withTimeout(fetch(entry.rss + '/MiddleEastEye/rss'), 5000)).text();
+          if (text && text.includes('<rss')) {
+            NITTER_INSTANCE = entry.web;
+            RSS_INSTANCE = entry.rss;
+            window.__RSS_UA = ua;
+            return;
+          }
+        } catch (e) {}
+      }
+    }
+    if (window.Android) {
       try {
-        const text = await withTimeout(nativeFetch(entry.rss + '/Reuters/rss'), 6000);
-        if (text && text.includes('<rss')) {
-          NITTER_INSTANCE = entry.web;
-          RSS_INSTANCE = entry.rss;
+        const t = await withTimeout(nativeFetchRaw(INSTANCE_LIST[0].rss + '/MiddleEastEye/rss'), 20000);
+        if (t && t.includes('<rss')) {
+          NITTER_INSTANCE = INSTANCE_LIST[0].web;
+          RSS_INSTANCE = INSTANCE_LIST[0].rss;
           return;
         }
       } catch (e) {}
@@ -169,6 +200,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /* ---------- Global clicks ---------- */
   document.body.addEventListener('click', (e) => {
+    if (e.target.classList.contains('verify-btn')) { openVerifyBrowser(); return; }
+
     const searchLink = e.target.closest('.in-app-search');
     if (searchLink) { e.preventDefault(); openSearch(searchLink.getAttribute('data-query')); return; }
     const userLink = e.target.closest('.in-app-user');
@@ -309,7 +342,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!added) {
       const d = document.createElement('div');
       d.className = 'error';
-      d.textContent = `Failed to load @${username}. Nitter might be down.`;
+      d.innerHTML = `Failed to load @${escapeHtml(username)}. ` +
+        '<button class="btn btn-primary verify-btn" style="margin-top:6px;font-size:11px;padding:6px 10px;">🌐 Verify Cloudflare</button>';
       container.prepend(d);
     }
   }
@@ -341,7 +375,10 @@ document.addEventListener('DOMContentLoaded', () => {
         frags.forEach(f => { const en = fragmentEntry(f); if (en) { channelContainer.appendChild(en.card); added++; } });
       } catch (e) {}
     }
-    if (!added) channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '.</div>';
+    if (!added) {
+      channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '. ' +
+        '<button class="btn btn-primary verify-btn" style="margin-top:6px;font-size:11px;padding:6px 10px;">🌐 Verify Cloudflare</button></div>';
+    }
   }
 
   /* ---------- Search ---------- */
@@ -411,7 +448,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const snippet = (lastRaw || 'no response').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
       channelContainer.innerHTML =
         '<p class="empty-state">No posts found for ' + escapeHtml(query) + '.</p>' +
-        '<div class="error" style="text-align:left; font-size:11px; word-break:break-all;">DEBUG → ' + escapeHtml(snippet) + '</div>';
+        '<div class="error" style="text-align:left; font-size:11px; word-break:break-all;">DEBUG → ' + escapeHtml(snippet) +
+        '<br><button class="btn btn-primary verify-btn" style="margin-top:8px;">🌐 Verify Cloudflare</button></div>';
     }
   }
 
@@ -559,18 +597,13 @@ document.addEventListener('DOMContentLoaded', () => {
           });
         }
       } catch (e) { if (!debugRaw) debugRaw = 'ERR: ' + e.message; }
-      if (!local.length && window.Android) {
-        try {
-          const frags = (await nativeFetchPage(`${NITTER_INSTANCE}/${ch.handle}`)).split('\u0001').filter(Boolean);
-          frags.slice(0, 3).forEach(f => { const en = fragmentEntry(f); if (en) local.push(en); });
-        } catch (e) {}
-      }
       entries.push(...local);
       done++;
-      loader.textContent = `Fetching ${CAT_LABEL[category]}… ${done}/${channels.length}`;
+      const hint = (!entries.length && debugRaw) ? ' | ' + debugRaw.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 50) : '';
+      loader.textContent = `Fetching ${CAT_LABEL[category]}… ${done}/${channels.length}` + hint;
     });
 
-    await pool(tasks, 4);
+    await pool(tasks, 3);
     loader.remove();
 
     entries.sort((a, b) => b.dateMs - a.dateMs);
@@ -581,7 +614,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const err = document.createElement('div');
       err.className = 'error';
       err.style.cssText = 'text-align:left; font-size:11px; word-break:break-all;';
-      err.textContent = 'Couldn\'t fetch any channel. DEBUG → ' + snippet;
+      err.innerHTML = 'Couldn\'t fetch any channel. DEBUG → ' + escapeHtml(snippet) +
+        '<br><button class="btn btn-primary verify-btn" style="margin-top:8px;">🌐 Open browser to verify Cloudflare</button>';
       trendContainer.appendChild(err);
       return;
     }
@@ -922,6 +956,8 @@ document.addEventListener('DOMContentLoaded', () => {
   /* ---------- STARTUP ---------- */
   switchView('trends');
   trendsLoaded = true;
-  loadTrends();
+  trendContainer.innerHTML = '<div class="loader">Finding a live Nitter instance…</div>';
+  withTimeout(probeInstance(), 20000).catch(() => {}).finally(() => {
+    loadTrends();
   });
 });
