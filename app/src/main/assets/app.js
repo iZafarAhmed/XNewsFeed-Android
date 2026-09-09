@@ -156,19 +156,14 @@ document.addEventListener('DOMContentLoaded', () => {
   /* ---------- Instance probe ---------- */
   async function probeInstance() {
     for (const entry of INSTANCE_LIST) {
-      for (const ua of UA_LIST) {
-        try {
-          const text = window.Android
-            ? await withTimeout(nativeFetchUA(entry.rss + '/MiddleEastEye/rss', ua), 7000)
-            : await (await withTimeout(fetch(entry.rss + '/MiddleEastEye/rss'), 7000)).text();
-          if (text && text.includes('<rss')) {
-            NITTER_INSTANCE = entry.web;
-            RSS_INSTANCE = entry.rss;
-            window.__RSS_UA = ua;
-            return;
-          }
-        } catch (e) {}
-      }
+      try {
+        const text = await withTimeout(nativeFetch(entry.rss + '/Reuters/rss'), 6000);
+        if (text && text.includes('<rss')) {
+          NITTER_INSTANCE = entry.web;
+          RSS_INSTANCE = entry.rss;
+          return;
+        }
+      } catch (e) {}
     }
   }
 
@@ -927,8 +922,6 @@ document.addEventListener('DOMContentLoaded', () => {
   /* ---------- STARTUP ---------- */
   switchView('trends');
   trendsLoaded = true;
-  trendContainer.innerHTML = '<div class="loader">Finding a live Nitter instance…</div>';
-  withTimeout(probeInstance(), 20000).catch(() => {}).finally(() => {
-    loadTrends();
+  loadTrends();
   });
 });
