@@ -85,8 +85,9 @@ public class MainActivity extends Activity {
                     try {
                         String target = URLDecoder.decode(url.substring(PROXY_BASE.length()), "UTF-8");
                         HttpURLConnection c = (HttpURLConnection) new URL(target).openConnection();
-                        c.setRequestProperty("User-Agent", UA);
-                        c.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+                        boolean isRss = target.contains("/rss");
+                        c.setRequestProperty("User-Agent", isRss ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 RSSReader/1.0" : UA);
+                        c.setRequestProperty("Accept", isRss ? "application/rss+xml, application/xml, text/xml, */*" : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
                         c.setRequestProperty("Accept-Encoding", "gzip");
                         c.setConnectTimeout(15000);
                         c.setReadTimeout(20000);
@@ -308,8 +309,9 @@ public class MainActivity extends Activity {
                 String tempPayload;
                 try {
                     HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-                    c.setRequestProperty("User-Agent", UA);
-                    c.setRequestProperty("Accept", "*/*");
+                    boolean isRss = url.contains("/rss");
+                    c.setRequestProperty("User-Agent", isRss ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 RSSReader/1.0" : UA);
+                    c.setRequestProperty("Accept", isRss ? "application/rss+xml, application/xml, text/xml, */*" : "*/*");
                     c.setRequestProperty("Accept-Encoding", "gzip");
                     c.setConnectTimeout(15000);
                     c.setReadTimeout(20000);
