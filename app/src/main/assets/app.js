@@ -561,7 +561,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /* ---------- Card builder ---------- */
-  function buildTweetCard(item, { username, avatarUrl = '', cat = '' }) {
+    function buildTweetCard(item, { username, avatarUrl = '', cat = '' }) {
     const title = item.querySelector('title')?.textContent || '';
     const creatorNode = item.getElementsByTagName('dc:creator')[0] || item.getElementsByTagName('creator')[0];
     const creator = creatorNode ? creatorNode.textContent : `@${username}`;
@@ -569,6 +569,35 @@ document.addEventListener('DOMContentLoaded', () => {
     const pubDate = item.querySelector('pubDate')?.textContent || '';
     const link = item.querySelector('link')?.textContent || '#';
     const tweetId = item.querySelector('guid')?.textContent || '';
+
+    // ✅ Extract image from media:content (more reliable than description)
+    let imageUrl = '';
+    const mediaContent = item.getElementsByTagName('media:content')[0];
+    if (mediaContent && mediaContent.getAttribute('url')) {
+      imageUrl = mediaContent.getAttribute('url');
+    } else {
+      // Fallback: try to extract from description
+      const descDiv = document.createElement('div');
+      descDiv.innerHTML = description;
+      const imgInDesc = descDiv.querySelector('img');
+      if (imgInDesc && imgInDesc.src) {
+        // Decode Nitter proxy URL
+        if (imgInDesc.src.includes('/pic/')) {
+          const match = imgInDesc.src.match(/\/pic\/(https?:\/\/[^&]+)/);
+          if (match) {
+            try {
+              imageUrl = decodeURIComponent(match[1]);
+            } catch (e) {
+              imageUrl = match[1];
+            }
+          }
+        } else if (imgInDesc.src.startsWith('/')) {
+          imageUrl = NITTER_INSTANCE + imgInDesc.src;
+        } else {
+          imageUrl = imgInDesc.src;
+        }
+      }
+    }
 
     let xUrl = link;
     try {
@@ -580,40 +609,10 @@ document.addEventListener('DOMContentLoaded', () => {
     card.className = 'tweet-card';
     card.setAttribute('data-user', username);
 
-       const descDiv = document.createElement('div');
-    descDiv.innerHTML = description;
-    const img = descDiv.querySelector('img');
-    
-    // ✅ Fix: Bypass Nitter's image proxy by extracting direct Twitter URLs
-    if (img && img.src) {
-      let finalSrc = img.src;
-      
-      // Decode Nitter proxy URLs like /pic/https%3A%2F%2Fpbs.twimg.com...
-      if (finalSrc.includes('/pic/')) {
-        const match = finalSrc.match(/\/pic\/(https?:\/\/[^&]+)/);
-        if (match) {
-          try {
-            finalSrc = decodeURIComponent(match[1]);
-          } catch (e) {
-            finalSrc = match[1];
-          }
-        }
-      }
-      // Handle relative URLs
-      else if (finalSrc.startsWith('/')) {
-        finalSrc = NITTER_INSTANCE + finalSrc;
-      }
-      
-      img.src = finalSrc;
-      
-      // Error handling - hide broken images
-      img.onerror = function() {
-        this.style.display = 'none';
-      };
-    }
-    
-    const isVideo = description.includes('Video') || (img && img.src.includes('ext_tw_video_thumb'));
+    const isVideo = description.includes('Video') || imageUrl.includes('ext_tw_video_thumb');
 
+    const descDiv = document.createElement('div');
+    descDiv.innerHTML = description;
     const pTags = descDiv.querySelectorAll('p');
     const contentHtml = pTags.length
       ? Array.from(pTags).map(p => `<p class="tweet-paragraph">${richTextHtml(p)}</p>`).join('')
@@ -627,27 +626,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const removeBtn = `<button class="remove-btn" data-user="${username}" title="Remove ${username}">❌</button>`;
     const translateBtn = `<button class="translate-btn" title="Translate to English">🌐</button>`;
 
-      let mediaHtml = '';
-    if (img && img.src && !img.src.includes('Tweet image')) {
-      // Decode the src again for the media HTML
-      let displaySrc = img.src;
-      if (displaySrc.includes('/pic/')) {
-        const match = displaySrc.match(/\/pic\/(https?:\/\/[^&]+)/);
-        if (match) {
-          try {
-            displaySrc = decodeURIComponent(match[1]);
-          } catch (e) {
-            displaySrc = match[1];
-          }
-        }
-      }
-      
-      mediaHtml = isVideo
-        ? `<div class="media-container" data-tweet-id="${tweetId}" data-username="${username}">
-             <img src="${displaySrc}" class="tweet-image" alt="Video thumbnail">
+    let mediaHtml = '';
+    if (imageUrl && !imageUrl.includes('ext_tw_video_thumb')) {
+      mediaHtml = `<img src="${escapeAttr(imageUrl)}" class="tweet-image" alt="Tweet image" onerror="this.style.display='none'">`;
+    } else if (imageUrl && imageUrl.includes('ext_tw_video_thumb')) {
+      mediaHtml = `<div class="media-container" data-tweet-id="${tweetId}" data-username="${username}">
+             <img src="${escapeAttr(imageUrl)}" class="tweet-image" alt="Video thumbnail">
              <div class="play-btn-overlay">▶ Play Video</div>
-           </div>`
-        : `<img src="${displaySrc}" class="tweet-image" alt="Tweet image">`;
+           </div>`;
     }
 
     card.innerHTML = `
@@ -668,7 +654,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const av = card.querySelector('img.avatar');
     if (av) av.addEventListener('error', () => { av.outerHTML = fallbackAvatarHtml(creator); });
 
-    if (isVideo) {
+    if (isVideo && mediaHtml.includes('media-container')) {
       card.querySelector('.media-container').addEventListener('click', function () { handleVideoPlayback(this); });
     }
     return card;
