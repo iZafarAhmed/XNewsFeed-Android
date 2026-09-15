@@ -595,9 +595,15 @@ document.addEventListener('DOMContentLoaded', () => {
     card.className = 'tweet-card';
     card.setAttribute('data-user', username);
 
-    const descDiv = document.createElement('div');
+        const descDiv = document.createElement('div');
     descDiv.innerHTML = description;
     const img = descDiv.querySelector('img');
+    
+    // ✅ Fix: Convert relative Nitter image URLs to absolute
+    if (img && img.src && img.src.startsWith('/')) {
+      img.src = NITTER_INSTANCE + img.src;
+    }
+    
     const isVideo = description.includes('Video') || (img && img.src.includes('ext_tw_video_thumb'));
 
     const pTags = descDiv.querySelectorAll('p');
