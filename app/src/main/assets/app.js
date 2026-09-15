@@ -87,7 +87,15 @@ async function smartFetch(url) {
 }
 
 async function rssFetch(url) {
-  if (window.Android) return withTimeout(nativeFetchUA(url, RSS_UA), 12000);
+  if (window.Android) {
+    // Use standard fetch with RSS-friendly headers via proxy
+    try {
+      const res = await withTimeout(fetch('https://proxy.xnewsfeed.local/' + encodeURIComponent(url)), 12000);
+      if (res.ok) return await res.text();
+    } catch (e) {}
+    // Fallback to native bridge
+    return withTimeout(nativeFetch(url), 12000);
+  }
   const res = await withTimeout(fetch(url), 12000);
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.text();
@@ -118,7 +126,7 @@ document.addEventListener('DOMContentLoaded', () => {
   
   const INSTANCE_LIST = [
     { web: 'https://nitter.kareem.one', rss: 'https://nitter.kareem.one' },
-    { web: 'https://nitter.meowing.monster/', rss: 'https://nitter.meowing.monster/' }
+    { web: 'https://nitter.meowing.monster', rss: 'https://nitter.meowing.monster' }
   ];
 
   const UA_LIST = [
