@@ -170,18 +170,25 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /* ---------- Global click handling ---------- */
-  document.body.addEventListener('click', (e) => {
-    const searchLink = e.target.closest('.in-app-search');
-    if (searchLink) { e.preventDefault(); openSearch(searchLink.getAttribute('data-query')); return; }
-    const userLink = e.target.closest('.in-app-user');
-    if (userLink) { e.preventDefault(); openChannel(userLink.getAttribute('data-user')); return; }
-
-    if (e.target.classList.contains('remove-btn')) {
-      const userToRemove = e.target.getAttribute('data-user');
+      if (e.target.classList.contains('remove-btn') || e.target.closest('.remove-btn')) {
+      const btn = e.target.closest('.remove-btn');
+      const userToRemove = btn.getAttribute('data-user');
+      if (!userToRemove) return;
+      
+      // Prevent event from bubbling to other handlers
+      e.stopPropagation();
+      e.preventDefault();
+      
       store.get(['usernames'], (r) => {
         const list = (r.usernames || []).filter(u => u !== userToRemove);
         store.set({ usernames: list }, () => {
+          // Remove all cards for this user
           document.querySelectorAll(`.tweet-card[data-user="${userToRemove}"]`).forEach(el => el.remove());
+          // Also remove any error messages for this user if present
+          const errors = container.querySelectorAll('.error');
+          errors.forEach(err => {
+            if (err.textContent.includes(userToRemove)) err.remove();
+          });
         });
       });
       return;
@@ -290,35 +297,42 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  async function fetchFeed(username, container) {
+    async function fetchFeed(username, container) {
     container.querySelectorAll(`.tweet-card[data-user="${username}"]`).forEach(el => el.remove());
     let added = 0;
+    let errorMsg = '';
+    
     try {
       const text = await rssFetch(`${RSS_INSTANCE}/${username}/rss`);
-      const xml = new DOMParser().parseFromString(text, 'text/xml');
-      const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
-      xml.querySelectorAll('item').forEach(item => {
-        container.appendChild(buildTweetCard(item, { username, avatarUrl: avatar }));
-        added++;
-      });
-    } catch (e) {}
-    if (!added && window.Android) {
-      try {
-        const frags = (await nativeFetchPage(`${NITTER_INSTANCE}/${username}`)).split('\u0001').filter(Boolean);
-        frags.forEach(f => { 
-          const doc = new DOMParser().parseFromString(f, 'text/html');
-          const node = doc.body ? doc.body.firstElementChild : null;
-          if (node) {
-            const card = buildSearchCard(node);
-            if (card) { container.appendChild(card); added++; }
+      // Check if we got actual XML or a Cloudflare/HTML error page
+      if (!text.includes('<rss') && !text.includes('<?xml')) {
+        errorMsg = 'Received invalid response (likely Cloudflare block).';
+      } else {
+        const xml = new DOMParser().parseFromString(text, 'text/xml');
+        if (xml.querySelector('parsererror')) {
+          errorMsg = 'XML parsing error.';
+        } else {
+          const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
+          const items = xml.querySelectorAll('item');
+          if (items.length === 0) {
+            errorMsg = 'No items found in RSS feed.';
+          } else {
+            items.forEach(item => {
+              container.appendChild(buildTweetCard(item, { username, avatarUrl: avatar }));
+              added++;
+            });
           }
-        });
-      } catch (e) {}
+        }
+      }
+    } catch (e) {
+      errorMsg = e.message;
     }
+
     if (!added) {
       const d = document.createElement('div');
       d.className = 'error';
-      d.textContent = `Failed to load @${username}. Nitter might be down.`;
+      d.style.cssText = 'background: #ffebee; color: #c62828; padding: 10px; border-radius: 8px; margin: 10px 0; font-size: 13px;';
+      d.innerHTML = `<strong>Failed to load @${username}.</strong><br>${errorMsg}<br><small>Try again in a minute or check if the instance is rate-limiting.</small>`;
       container.prepend(d);
     }
   }
