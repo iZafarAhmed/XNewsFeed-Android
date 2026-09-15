@@ -1,9 +1,10 @@
-// app.js — X News Feed (FINAL WORKING VERSION)
+// app.js — X News Feed (FINAL — with working image decoder)
 
 window.addEventListener('error', (e) => {
   console.warn('JS Error:', e.message);
 });
 
+/* ========== STORAGE ========== */
 const store = {
   _has: typeof chrome !== 'undefined' && !!(chrome.storage && chrome.storage.local),
   get(keys, cb) {
@@ -22,6 +23,7 @@ const store = {
   }
 };
 
+/* ========== FETCH LAYER ========== */
 let _cbId = 0;
 const _cbs = {};
 
@@ -60,7 +62,10 @@ async function smartFetch(url) {
   if (window.Android) {
     try {
       const res = await withTimeout(fetch('https://proxy.xnewsfeed.local/' + encodeURIComponent(url)), 12000);
-      if (res.ok) return await res.text();
+      if (res.ok) {
+        const text = await res.text();
+        if (!(url.includes('/rss') && text.includes('RSS client'))) return text;
+      }
     } catch (e) {}
     return withTimeout(nativeFetch(url), 12000);
   }
@@ -82,6 +87,7 @@ async function rssFetch(url) {
   return res.text();
 }
 
+/* ========== APP ========== */
 document.addEventListener('DOMContentLoaded', () => {
   const feedContainer = document.getElementById('feed-container');
   const trendContainer = document.getElementById('trend-container');
@@ -100,9 +106,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const viewTrends = document.getElementById('view-trends');
   const viewChannel = document.getElementById('view-channel');
 
-  let NITTER_INSTANCE = 'https://nitter.kareem.one';        
-  let RSS_INSTANCE = 'https://nitter.kareem.one';       
-  
+  let NITTER_INSTANCE = 'https://nitter.kareem.one';
+  let RSS_INSTANCE = 'https://nitter.kareem.one';
+
   const INSTANCE_LIST = [
     { web: 'https://nitter.kareem.one', rss: 'https://nitter.kareem.one' },
     { web: 'https://xcancel.com', rss: 'https://rss.xcancel.com' },
@@ -110,11 +116,11 @@ document.addEventListener('DOMContentLoaded', () => {
     { web: 'https://nitter.net', rss: 'https://nitter.net' }
   ];
 
-  const CAT_EMOJI = { news: '', ai: '🤖', stocks: '💰', war: '', tech: '💻', crypto: '', business: '💼', science: '🔬', world: '' };
+  const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻', crypto: '🪙', business: '💼', science: '🔬', world: '🌐' };
   const CAT_LABEL = {
-    news: '📰 News', ai: ' AI', stocks: '💰 India Stocks',
-    war: ' War News', tech: '💻 Tech News', crypto: '🪙 Crypto',
-    business: '💼 Business', science: '🔬 Science', world: ' World News'
+    news: '📰 News', ai: '🤖 AI', stocks: '💰 India Stocks',
+    war: '🌍 War News', tech: '💻 Tech News', crypto: '🪙 Crypto',
+    business: '💼 Business', science: '🔬 Science', world: '🌐 World News'
   };
 
   let currentView = 'feed';
@@ -125,6 +131,25 @@ document.addEventListener('DOMContentLoaded', () => {
   let channelMode = 'user';
   let currentSearchQuery = '';
 
+  /* ---------- ✅ IMAGE URL DECODER ---------- */
+  // Converts Nitter proxy URLs (/pic/xxx%2Fyyy) into direct Twitter CDN URLs
+  function fixImageUrl(src) {
+    if (!src) return '';
+    let s = String(src).trim();
+    const idx = s.indexOf('/pic/');
+    if (idx !== -1) {
+      const enc = s.substring(idx + 5);
+      let dec = enc;
+      try { dec = decodeURIComponent(enc); } catch (e) {}
+      if (dec.startsWith('http')) return dec;
+      return 'https://pbs.twimg.com/' + dec;   // ✅ direct, auth-free Twitter CDN
+    }
+    if (s.startsWith('http')) return s;
+    if (s.startsWith('/')) return NITTER_INSTANCE + s;
+    return s;
+  }
+
+  /* ---------- Instance failover ---------- */
   async function probeInstance() {
     for (const entry of INSTANCE_LIST) {
       try {
@@ -140,9 +165,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  /* ---------- Global click handling ---------- */
   document.body.addEventListener('click', (e) => {
     const searchLink = e.target.closest('.in-app-search');
     if (searchLink) { e.preventDefault(); e.stopPropagation(); openSearch(searchLink.getAttribute('data-query')); return; }
+
     const userLink = e.target.closest('.in-app-user');
     if (userLink) { e.preventDefault(); e.stopPropagation(); openChannel(userLink.getAttribute('data-user')); return; }
 
@@ -152,7 +179,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const btn = e.target.closest('.remove-btn');
       const userToRemove = btn.getAttribute('data-user');
       if (!userToRemove) return;
-      
       store.get(['usernames'], (r) => {
         const list = (r.usernames || []).filter(u => u !== userToRemove);
         store.set({ usernames: list }, () => {
@@ -180,12 +206,13 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.textContent = '⏳';
       translateContent(contentEl)
         .then(() => { contentEl.dataset.translated = '1'; btn.textContent = '🔄'; })
-        .catch(() => { btn.textContent = ''; setTimeout(() => { btn.textContent = ''; }, 2000); })
+        .catch(() => { btn.textContent = '❗'; setTimeout(() => { btn.textContent = '🌐'; }, 2000); })
         .finally(() => { btn.disabled = false; });
       return;
     }
   });
 
+  /* ---------- Theme ---------- */
   store.get(['darkMode'], (r) => applyTheme(!!r.darkMode));
   themeBtn.addEventListener('click', () => {
     const dark = !document.body.classList.contains('dark');
@@ -197,6 +224,7 @@ document.addEventListener('DOMContentLoaded', () => {
     themeBtn.textContent = dark ? '☀️' : '🌙';
   }
 
+  /* ---------- Views ---------- */
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
       const view = tab.dataset.view;
@@ -231,6 +259,7 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (currentView === 'channel') (channelMode === 'search' ? openSearch(currentSearchQuery) : openChannel(currentChannelUser));
   });
 
+  /* ---------- Controls ---------- */
   loadBtn.addEventListener('click', () => {
     const u = usernameInput.value.trim().replace('@', '');
     if (u) { addAndFetchUser(u); usernameInput.value = ''; }
@@ -246,6 +275,7 @@ document.addEventListener('DOMContentLoaded', () => {
     popularSelect.value = '';
   });
 
+  /* ---------- Feeds ---------- */
   function reloadFeeds() {
     feedContainer.innerHTML = '<div class="loader">Loading feeds…</div>';
     store.get(['usernames'], (r) => {
@@ -268,41 +298,34 @@ document.addEventListener('DOMContentLoaded', () => {
     container.querySelectorAll(`.tweet-card[data-user="${username}"]`).forEach(el => el.remove());
     let added = 0;
     let errorMsg = '';
-    
     try {
       const text = await rssFetch(`${RSS_INSTANCE}/${username}/rss`);
       if (!text.includes('<rss') && !text.includes('<?xml')) {
-        errorMsg = 'Received invalid response.';
+        errorMsg = 'Invalid response (blocked?).';
       } else {
         const xml = new DOMParser().parseFromString(text, 'text/xml');
         if (xml.querySelector('parsererror')) {
-          errorMsg = 'XML parsing error.';
+          errorMsg = 'XML parse error.';
         } else {
           const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
           const items = xml.querySelectorAll('item');
-          if (items.length === 0) {
-            errorMsg = 'No items found in RSS feed.';
-          } else {
-            items.forEach(item => {
-              container.appendChild(buildTweetCard(item, { username, avatarUrl: avatar }));
-              added++;
-            });
-          }
+          if (!items.length) errorMsg = 'No items in feed.';
+          items.forEach(item => {
+            container.appendChild(buildTweetCard(item, { username, avatarUrl: avatar }));
+            added++;
+          });
         }
       }
-    } catch (e) {
-      errorMsg = e.message;
-    }
-
+    } catch (e) { errorMsg = e.message; }
     if (!added) {
       const d = document.createElement('div');
       d.className = 'error';
-      d.style.cssText = 'background: #ffebee; color: #c62828; padding: 10px; border-radius: 8px; margin: 10px 0; font-size: 13px;';
-      d.innerHTML = `<strong>Failed to load @${username}.</strong><br>${errorMsg}`;
+      d.innerHTML = `<strong>Failed to load @${escapeHtml(username)}.</strong> ${escapeHtml(errorMsg)}`;
       container.prepend(d);
     }
   }
 
+  /* ---------- Channel view ---------- */
   async function openChannel(username) {
     const handle = (username || '').replace('@', '').trim();
     if (!handle) return;
@@ -326,6 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!added) channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '.</div>';
   }
 
+  /* ---------- Search ---------- */
   async function openSearch(query) {
     if (!query) return;
     currentSearchQuery = query;
@@ -419,11 +443,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let isVideo = !!node.querySelector('video, .gallery-video, .video-container');
     let imgSrc = '';
     const imgs = node.querySelectorAll('.attachments img');
-    if (imgs.length) imgSrc = imgs[0].getAttribute('src') || '';
-    if (imgSrc && imgSrc.startsWith('/')) imgSrc = NITTER_INSTANCE + imgSrc;
+    if (imgs.length) imgSrc = fixImageUrl(imgs[0].getAttribute('src'));
 
-    let avatarUrl = node.querySelector('.tweet-avatar')?.getAttribute('src') || '';
-    if (avatarUrl && avatarUrl.startsWith('/')) avatarUrl = NITTER_INSTANCE + avatarUrl;
+    let avatarUrl = fixImageUrl(node.querySelector('.tweet-avatar')?.getAttribute('src') || '');
 
     const card = document.createElement('div');
     card.className = 'tweet-card';
@@ -435,10 +457,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (imgSrc) {
       mediaHtml = isVideo
         ? `<div class="media-container" data-tweet-id="${tweetId}" data-username="${username}">
-             <img src="${imgSrc}" class="tweet-image" alt="Video thumbnail">
+             <img src="${escapeAttr(imgSrc)}" class="tweet-image" alt="Video thumbnail">
              <div class="play-btn-overlay">▶ Play Video</div>
            </div>`
-        : `<img src="${imgSrc}" class="tweet-image" alt="Tweet image">`;
+        : `<img src="${escapeAttr(imgSrc)}" class="tweet-image" alt="Tweet image" onerror="this.style.display='none'">`;
     }
 
     const xUrl = tweetId ? `https://x.com/${username}/status/${tweetId}` : '#';
@@ -447,7 +469,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="tweet-header">
         <div class="tweet-user">${avatarHtml}<strong>${escapeHtml(creator)}</strong></div>
         <div style="display:flex; align-items:center; gap:6px;">
-          <button class="translate-btn" title="Translate to English"></button>
+          <button class="translate-btn" title="Translate to English">🌐</button>
           <span class="tweet-date" title="${escapeAttr(dateTitle)}">${escapeHtml(dateTitle)}</span>
         </div>
       </div>
@@ -464,6 +486,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return card;
   }
 
+  /* ---------- Categories & Trending ---------- */
   function categoryFromLabel(label) {
     if (label.includes('AI')) return 'ai';
     if (label.includes('Stocks')) return 'stocks';
@@ -495,7 +518,7 @@ document.addEventListener('DOMContentLoaded', () => {
     trendContainer.innerHTML = '';
     const header = document.createElement('div');
     header.className = 'trend-header';
-    header.textContent = ` ${CAT_LABEL[category]} — latest from ${channels.length} channels`;
+    header.textContent = `🔥 ${CAT_LABEL[category]} — latest from ${channels.length} channels`;
     trendContainer.appendChild(header);
 
     const loader = document.createElement('div');
@@ -536,9 +559,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     collected.forEach(c => trendContainer.appendChild(buildTweetCard(c.item, c)));
-    header.innerHTML = ` ${CAT_LABEL[category]} — latest from ${channels.length} channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
+    header.innerHTML = `🔥 ${CAT_LABEL[category]} — latest from ${channels.length} channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
   }
 
+  /* ---------- Card builder ---------- */
   function buildTweetCard(item, { username, avatarUrl = '', cat = '' }) {
     const title = item.querySelector('title')?.textContent || '';
     const creatorNode = item.getElementsByTagName('dc:creator')[0] || item.getElementsByTagName('creator')[0];
@@ -558,26 +582,13 @@ document.addEventListener('DOMContentLoaded', () => {
     card.className = 'tweet-card';
     card.setAttribute('data-user', username);
 
-    // ✅ Extract image from description HTML
-    let imageUrl = '';
-    let isVideo = false;
-    
     const descDiv = document.createElement('div');
     descDiv.innerHTML = description;
-    
-    // Look for images in the description
-    const img = descDiv.querySelector('img');
-    if (img && img.src) {
-      // Check if it's a video thumbnail
-      isVideo = img.src.includes('ext_tw_video_thumb') || description.includes('Video');
-      
-      // Use the image URL directly (Nitter proxy URLs work if accessed properly)
-      if (img.src.startsWith('http')) {
-        imageUrl = img.src;
-      } else if (img.src.startsWith('/')) {
-        imageUrl = NITTER_INSTANCE + img.src;
-      }
-    }
+
+    // ✅ Read RAW attribute (not .src) then decode Nitter proxy → Twitter CDN
+    const imgEl = descDiv.querySelector('img');
+    const imageUrl = imgEl ? fixImageUrl(imgEl.getAttribute('src')) : '';
+    const isVideo = description.includes('Video') || imageUrl.includes('ext_tw_video_thumb');
 
     const pTags = descDiv.querySelectorAll('p');
     const contentHtml = pTags.length
@@ -593,13 +604,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const translateBtn = `<button class="translate-btn" title="Translate to English">🌐</button>`;
 
     let mediaHtml = '';
-    if (imageUrl && !isVideo) {
-      mediaHtml = `<img src="${escapeAttr(imageUrl)}" class="tweet-image" alt="Tweet image" onerror="this.style.display='none'" crossorigin="anonymous">`;
-    } else if (imageUrl && isVideo) {
-      mediaHtml = `<div class="media-container" data-tweet-id="${tweetId}" data-username="${username}">
-             <img src="${escapeAttr(imageUrl)}" class="tweet-image" alt="Video thumbnail" onerror="this.style.display='none'">
+    if (imageUrl) {
+      mediaHtml = isVideo
+        ? `<div class="media-container" data-tweet-id="${tweetId}" data-username="${username}">
+             <img src="${escapeAttr(imageUrl)}" class="tweet-image" alt="Video thumbnail">
              <div class="play-btn-overlay">▶ Play Video</div>
-           </div>`;
+           </div>`
+        : `<img src="${escapeAttr(imageUrl)}" class="tweet-image" alt="Tweet image" onerror="this.style.display='none'">`;
     }
 
     card.innerHTML = `
@@ -626,6 +637,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return card;
   }
 
+  /* ---------- Text helpers ---------- */
   function linkify(escapedText) {
     return escapedText.replace(/[#@][A-Za-z0-9_]+/g, (m) => {
       if (m.startsWith('#')) {
@@ -696,6 +708,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
+  /* ---------- Translation ---------- */
   async function translateContent(contentEl) {
     const paragraphs = contentEl.querySelectorAll('.tweet-paragraph');
     if (!paragraphs.length) return;
@@ -749,6 +762,7 @@ document.addEventListener('DOMContentLoaded', () => {
     throw new Error('translation failed');
   }
 
+  /* ---------- Video ---------- */
   async function handleVideoPlayback(container) {
     const tid = container.getAttribute('data-tweet-id');
     const uname = container.getAttribute('data-username');
@@ -881,6 +895,7 @@ document.addEventListener('DOMContentLoaded', () => {
     container.onclick = () => window.open(url, '_blank');
   }
 
+  /* ---------- STARTUP ---------- */
   switchView('trends');
   trendsLoaded = true;
   trendContainer.innerHTML = '<div class="loader">Finding a live Nitter instance…</div>';
