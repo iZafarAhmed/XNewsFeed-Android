@@ -580,20 +580,33 @@ document.addEventListener('DOMContentLoaded', () => {
     card.className = 'tweet-card';
     card.setAttribute('data-user', username);
 
-        const descDiv = document.createElement('div');
+       const descDiv = document.createElement('div');
     descDiv.innerHTML = description;
     const img = descDiv.querySelector('img');
     
-    // ✅ Fix: Handle Nitter image proxy URLs properly
+    // ✅ Fix: Bypass Nitter's image proxy by extracting direct Twitter URLs
     if (img && img.src) {
-      if (img.src.startsWith('/')) {
-        // Relative URL - make it absolute
-        img.src = NITTER_INSTANCE + img.src;
-      } else if (img.src.includes('nitter.kareem.one') || img.src.includes('nitter.')) {
-        // Already absolute Nitter URL - ensure HTTPS
-        img.src = img.src.replace('http://', 'https://');
+      let finalSrc = img.src;
+      
+      // Decode Nitter proxy URLs like /pic/https%3A%2F%2Fpbs.twimg.com...
+      if (finalSrc.includes('/pic/')) {
+        const match = finalSrc.match(/\/pic\/(https?:\/\/[^&]+)/);
+        if (match) {
+          try {
+            finalSrc = decodeURIComponent(match[1]);
+          } catch (e) {
+            finalSrc = match[1];
+          }
+        }
       }
-      // Add error handling
+      // Handle relative URLs
+      else if (finalSrc.startsWith('/')) {
+        finalSrc = NITTER_INSTANCE + finalSrc;
+      }
+      
+      img.src = finalSrc;
+      
+      // Error handling - hide broken images
       img.onerror = function() {
         this.style.display = 'none';
       };
@@ -614,14 +627,27 @@ document.addEventListener('DOMContentLoaded', () => {
     const removeBtn = `<button class="remove-btn" data-user="${username}" title="Remove ${username}">❌</button>`;
     const translateBtn = `<button class="translate-btn" title="Translate to English">🌐</button>`;
 
-    let mediaHtml = '';
-    if (img) {
+      let mediaHtml = '';
+    if (img && img.src && !img.src.includes('Tweet image')) {
+      // Decode the src again for the media HTML
+      let displaySrc = img.src;
+      if (displaySrc.includes('/pic/')) {
+        const match = displaySrc.match(/\/pic\/(https?:\/\/[^&]+)/);
+        if (match) {
+          try {
+            displaySrc = decodeURIComponent(match[1]);
+          } catch (e) {
+            displaySrc = match[1];
+          }
+        }
+      }
+      
       mediaHtml = isVideo
         ? `<div class="media-container" data-tweet-id="${tweetId}" data-username="${username}">
-             <img src="${img.src}" class="tweet-image" alt="Video thumbnail">
+             <img src="${displaySrc}" class="tweet-image" alt="Video thumbnail">
              <div class="play-btn-overlay">▶ Play Video</div>
            </div>`
-        : `<img src="${img.src}" class="tweet-image" alt="Tweet image">`;
+        : `<img src="${displaySrc}" class="tweet-image" alt="Tweet image">`;
     }
 
     card.innerHTML = `
