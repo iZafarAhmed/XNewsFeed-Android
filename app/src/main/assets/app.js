@@ -1,11 +1,9 @@
-// app.js — X News Feed (FINAL FIXED VERSION)
+// app.js — X News Feed (FINAL WORKING VERSION)
 
-// Silent error logging
 window.addEventListener('error', (e) => {
   console.warn('JS Error:', e.message);
 });
 
-/* ========== STORAGE ========== */
 const store = {
   _has: typeof chrome !== 'undefined' && !!(chrome.storage && chrome.storage.local),
   get(keys, cb) {
@@ -24,7 +22,6 @@ const store = {
   }
 };
 
-/* ========== FETCH LAYER ========== */
 let _cbId = 0;
 const _cbs = {};
 
@@ -63,10 +60,7 @@ async function smartFetch(url) {
   if (window.Android) {
     try {
       const res = await withTimeout(fetch('https://proxy.xnewsfeed.local/' + encodeURIComponent(url)), 12000);
-      if (res.ok) {
-        const text = await res.text();
-        if (!(url.includes('/rss') && text.includes('RSS client'))) return text;
-      }
+      if (res.ok) return await res.text();
     } catch (e) {}
     return withTimeout(nativeFetch(url), 12000);
   }
@@ -88,7 +82,6 @@ async function rssFetch(url) {
   return res.text();
 }
 
-/* ========== APP ========== */
 document.addEventListener('DOMContentLoaded', () => {
   const feedContainer = document.getElementById('feed-container');
   const trendContainer = document.getElementById('trend-container');
@@ -117,11 +110,11 @@ document.addEventListener('DOMContentLoaded', () => {
     { web: 'https://nitter.net', rss: 'https://nitter.net' }
   ];
 
-  const CAT_EMOJI = { news: '', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻', crypto: '🪙', business: '💼', science: '🔬', world: '🌐' };
+  const CAT_EMOJI = { news: '', ai: '🤖', stocks: '💰', war: '', tech: '💻', crypto: '', business: '💼', science: '🔬', world: '' };
   const CAT_LABEL = {
-    news: '📰 News', ai: '🤖 AI', stocks: '💰 India Stocks',
+    news: '📰 News', ai: ' AI', stocks: '💰 India Stocks',
     war: ' War News', tech: '💻 Tech News', crypto: '🪙 Crypto',
-    business: '💼 Business', science: '🔬 Science', world: '🌐 World News'
+    business: '💼 Business', science: '🔬 Science', world: ' World News'
   };
 
   let currentView = 'feed';
@@ -132,7 +125,6 @@ document.addEventListener('DOMContentLoaded', () => {
   let channelMode = 'user';
   let currentSearchQuery = '';
 
-  /* ---------- Instance failover ---------- */
   async function probeInstance() {
     for (const entry of INSTANCE_LIST) {
       try {
@@ -148,17 +140,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  /* ---------- Global click handling ---------- */
   document.body.addEventListener('click', (e) => {
-    // ✅ Search/Hashtag links
     const searchLink = e.target.closest('.in-app-search');
     if (searchLink) { e.preventDefault(); e.stopPropagation(); openSearch(searchLink.getAttribute('data-query')); return; }
-    
-    // ✅ User mention links
     const userLink = e.target.closest('.in-app-user');
     if (userLink) { e.preventDefault(); e.stopPropagation(); openChannel(userLink.getAttribute('data-user')); return; }
 
-    // ✅ Delete button
     if (e.target.classList.contains('remove-btn') || e.target.closest('.remove-btn')) {
       e.preventDefault();
       e.stopPropagation();
@@ -175,7 +162,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // ✅ Translate button
     if (e.target.classList.contains('translate-btn')) {
       e.preventDefault();
       e.stopPropagation();
@@ -200,7 +186,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  /* ---------- Theme ---------- */
   store.get(['darkMode'], (r) => applyTheme(!!r.darkMode));
   themeBtn.addEventListener('click', () => {
     const dark = !document.body.classList.contains('dark');
@@ -212,7 +197,6 @@ document.addEventListener('DOMContentLoaded', () => {
     themeBtn.textContent = dark ? '☀️' : '🌙';
   }
 
-  /* ---------- Views ---------- */
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
       const view = tab.dataset.view;
@@ -247,7 +231,6 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (currentView === 'channel') (channelMode === 'search' ? openSearch(currentSearchQuery) : openChannel(currentChannelUser));
   });
 
-  /* ---------- Controls ---------- */
   loadBtn.addEventListener('click', () => {
     const u = usernameInput.value.trim().replace('@', '');
     if (u) { addAndFetchUser(u); usernameInput.value = ''; }
@@ -263,7 +246,6 @@ document.addEventListener('DOMContentLoaded', () => {
     popularSelect.value = '';
   });
 
-  /* ---------- Feeds ---------- */
   function reloadFeeds() {
     feedContainer.innerHTML = '<div class="loader">Loading feeds…</div>';
     store.get(['usernames'], (r) => {
@@ -290,7 +272,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const text = await rssFetch(`${RSS_INSTANCE}/${username}/rss`);
       if (!text.includes('<rss') && !text.includes('<?xml')) {
-        errorMsg = 'Received invalid response (likely Cloudflare block).';
+        errorMsg = 'Received invalid response.';
       } else {
         const xml = new DOMParser().parseFromString(text, 'text/xml');
         if (xml.querySelector('parsererror')) {
@@ -321,7 +303,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  /* ---------- Channel view ---------- */
   async function openChannel(username) {
     const handle = (username || '').replace('@', '').trim();
     if (!handle) return;
@@ -345,7 +326,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!added) channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '.</div>';
   }
 
-  /* ---------- Search ---------- */
   async function openSearch(query) {
     if (!query) return;
     currentSearchQuery = query;
@@ -467,7 +447,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="tweet-header">
         <div class="tweet-user">${avatarHtml}<strong>${escapeHtml(creator)}</strong></div>
         <div style="display:flex; align-items:center; gap:6px;">
-          <button class="translate-btn" title="Translate to English">🌐</button>
+          <button class="translate-btn" title="Translate to English"></button>
           <span class="tweet-date" title="${escapeAttr(dateTitle)}">${escapeHtml(dateTitle)}</span>
         </div>
       </div>
@@ -484,7 +464,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return card;
   }
 
-  /* ---------- Categories & Trending ---------- */
   function categoryFromLabel(label) {
     if (label.includes('AI')) return 'ai';
     if (label.includes('Stocks')) return 'stocks';
@@ -516,7 +495,7 @@ document.addEventListener('DOMContentLoaded', () => {
     trendContainer.innerHTML = '';
     const header = document.createElement('div');
     header.className = 'trend-header';
-    header.textContent = `🔥 ${CAT_LABEL[category]} — latest from ${channels.length} channels`;
+    header.textContent = ` ${CAT_LABEL[category]} — latest from ${channels.length} channels`;
     trendContainer.appendChild(header);
 
     const loader = document.createElement('div');
@@ -560,8 +539,7 @@ document.addEventListener('DOMContentLoaded', () => {
     header.innerHTML = ` ${CAT_LABEL[category]} — latest from ${channels.length} channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
   }
 
-  /* ---------- Card builder ---------- */
-    function buildTweetCard(item, { username, avatarUrl = '', cat = '' }) {
+  function buildTweetCard(item, { username, avatarUrl = '', cat = '' }) {
     const title = item.querySelector('title')?.textContent || '';
     const creatorNode = item.getElementsByTagName('dc:creator')[0] || item.getElementsByTagName('creator')[0];
     const creator = creatorNode ? creatorNode.textContent : `@${username}`;
@@ -569,35 +547,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const pubDate = item.querySelector('pubDate')?.textContent || '';
     const link = item.querySelector('link')?.textContent || '#';
     const tweetId = item.querySelector('guid')?.textContent || '';
-
-    // ✅ Extract image from media:content (more reliable than description)
-    let imageUrl = '';
-    const mediaContent = item.getElementsByTagName('media:content')[0];
-    if (mediaContent && mediaContent.getAttribute('url')) {
-      imageUrl = mediaContent.getAttribute('url');
-    } else {
-      // Fallback: try to extract from description
-      const descDiv = document.createElement('div');
-      descDiv.innerHTML = description;
-      const imgInDesc = descDiv.querySelector('img');
-      if (imgInDesc && imgInDesc.src) {
-        // Decode Nitter proxy URL
-        if (imgInDesc.src.includes('/pic/')) {
-          const match = imgInDesc.src.match(/\/pic\/(https?:\/\/[^&]+)/);
-          if (match) {
-            try {
-              imageUrl = decodeURIComponent(match[1]);
-            } catch (e) {
-              imageUrl = match[1];
-            }
-          }
-        } else if (imgInDesc.src.startsWith('/')) {
-          imageUrl = NITTER_INSTANCE + imgInDesc.src;
-        } else {
-          imageUrl = imgInDesc.src;
-        }
-      }
-    }
 
     let xUrl = link;
     try {
@@ -609,10 +558,27 @@ document.addEventListener('DOMContentLoaded', () => {
     card.className = 'tweet-card';
     card.setAttribute('data-user', username);
 
-    const isVideo = description.includes('Video') || imageUrl.includes('ext_tw_video_thumb');
-
+    // ✅ Extract image from description HTML
+    let imageUrl = '';
+    let isVideo = false;
+    
     const descDiv = document.createElement('div');
     descDiv.innerHTML = description;
+    
+    // Look for images in the description
+    const img = descDiv.querySelector('img');
+    if (img && img.src) {
+      // Check if it's a video thumbnail
+      isVideo = img.src.includes('ext_tw_video_thumb') || description.includes('Video');
+      
+      // Use the image URL directly (Nitter proxy URLs work if accessed properly)
+      if (img.src.startsWith('http')) {
+        imageUrl = img.src;
+      } else if (img.src.startsWith('/')) {
+        imageUrl = NITTER_INSTANCE + img.src;
+      }
+    }
+
     const pTags = descDiv.querySelectorAll('p');
     const contentHtml = pTags.length
       ? Array.from(pTags).map(p => `<p class="tweet-paragraph">${richTextHtml(p)}</p>`).join('')
@@ -627,11 +593,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const translateBtn = `<button class="translate-btn" title="Translate to English">🌐</button>`;
 
     let mediaHtml = '';
-    if (imageUrl && !imageUrl.includes('ext_tw_video_thumb')) {
-      mediaHtml = `<img src="${escapeAttr(imageUrl)}" class="tweet-image" alt="Tweet image" onerror="this.style.display='none'">`;
-    } else if (imageUrl && imageUrl.includes('ext_tw_video_thumb')) {
+    if (imageUrl && !isVideo) {
+      mediaHtml = `<img src="${escapeAttr(imageUrl)}" class="tweet-image" alt="Tweet image" onerror="this.style.display='none'" crossorigin="anonymous">`;
+    } else if (imageUrl && isVideo) {
       mediaHtml = `<div class="media-container" data-tweet-id="${tweetId}" data-username="${username}">
-             <img src="${escapeAttr(imageUrl)}" class="tweet-image" alt="Video thumbnail">
+             <img src="${escapeAttr(imageUrl)}" class="tweet-image" alt="Video thumbnail" onerror="this.style.display='none'">
              <div class="play-btn-overlay">▶ Play Video</div>
            </div>`;
     }
@@ -660,7 +626,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return card;
   }
 
-  /* ---------- Text helpers ---------- */
   function linkify(escapedText) {
     return escapedText.replace(/[#@][A-Za-z0-9_]+/g, (m) => {
       if (m.startsWith('#')) {
@@ -731,7 +696,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
-  /* ---------- Translation ---------- */
   async function translateContent(contentEl) {
     const paragraphs = contentEl.querySelectorAll('.tweet-paragraph');
     if (!paragraphs.length) return;
@@ -785,7 +749,6 @@ document.addEventListener('DOMContentLoaded', () => {
     throw new Error('translation failed');
   }
 
-  /* ---------- Video ---------- */
   async function handleVideoPlayback(container) {
     const tid = container.getAttribute('data-tweet-id');
     const uname = container.getAttribute('data-username');
@@ -918,7 +881,6 @@ document.addEventListener('DOMContentLoaded', () => {
     container.onclick = () => window.open(url, '_blank');
   }
 
-  /* ---------- STARTUP ---------- */
   switchView('trends');
   trendsLoaded = true;
   trendContainer.innerHTML = '<div class="loader">Finding a live Nitter instance…</div>';
