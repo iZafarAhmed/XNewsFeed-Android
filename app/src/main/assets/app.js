@@ -1,11 +1,8 @@
 // app.js — X News Feed (FINAL — Android WebView + Browser compatible)
 
-// Visible runtime-error banner (so a blank screen never happens silently again)
+// Silent error logging (no banner)
 window.addEventListener('error', (e) => {
-  const d = document.createElement('div');
-  d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#d93025;color:#fff;font-size:11px;padding:6px;z-index:999;word-break:break-all;';
-  d.textContent = 'JS ERROR: ' + e.message;
-  if (document.body) document.body.appendChild(d);
+  console.warn('JS Error:', e.message);
 });
 
 /* ========== STORAGE ========== */
@@ -126,7 +123,9 @@ document.addEventListener('DOMContentLoaded', () => {
   
   const INSTANCE_LIST = [
     { web: 'https://nitter.kareem.one', rss: 'https://nitter.kareem.one' },
-    { web: 'https://nitter.meowing.monster', rss: 'https://nitter.meowing.monster' }
+    { web: 'https://xcancel.com', rss: 'https://rss.xcancel.com' },
+    { web: 'https://nitter.poast.org', rss: 'https://nitter.poast.org' },
+    { web: 'https://nitter.net', rss: 'https://nitter.net' }
   ];
 
   const UA_LIST = [
