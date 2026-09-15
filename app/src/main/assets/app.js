@@ -1,6 +1,6 @@
-// app.js — X News Feed (FINAL — Android WebView + Browser compatible)
+// app.js — X News Feed (FINAL FIXED VERSION)
 
-// Silent error logging (no banner)
+// Silent error logging
 window.addEventListener('error', (e) => {
   console.warn('JS Error:', e.message);
 });
@@ -46,14 +46,6 @@ function nativeFetch(url) {
   });
 }
 
-function nativeFetchUA(url, ua) {
-  return new Promise((resolve, reject) => {
-    const id = 'f' + (++_cbId);
-    _cbs[id] = { resolve, reject };
-    window.Android.fetchUA(url, id, ua);
-  });
-}
-
 function nativeFetchPage(url) {
   return new Promise((resolve, reject) => {
     const id = 'p' + (++_cbId);
@@ -85,12 +77,10 @@ async function smartFetch(url) {
 
 async function rssFetch(url) {
   if (window.Android) {
-    // Use standard fetch with RSS-friendly headers via proxy
     try {
       const res = await withTimeout(fetch('https://proxy.xnewsfeed.local/' + encodeURIComponent(url)), 12000);
       if (res.ok) return await res.text();
     } catch (e) {}
-    // Fallback to native bridge
     return withTimeout(nativeFetch(url), 12000);
   }
   const res = await withTimeout(fetch(url), 12000);
@@ -117,7 +107,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const viewTrends = document.getElementById('view-trends');
   const viewChannel = document.getElementById('view-channel');
 
-  // ✅ PRIMARY INSTANCE: nitter.kareem.one (currently has RSS enabled)
   let NITTER_INSTANCE = 'https://nitter.kareem.one';        
   let RSS_INSTANCE = 'https://nitter.kareem.one';       
   
@@ -128,20 +117,10 @@ document.addEventListener('DOMContentLoaded', () => {
     { web: 'https://nitter.net', rss: 'https://nitter.net' }
   ];
 
-  const UA_LIST = [
-    'Feeder/2.9.11 (Android)',
-    'Feedly/1.0',
-    'NetNewsWire/6.1.4 (Mac OS X; en_US)',
-    'Tiny Tiny RSS/24.02 (http://tt-rss.org/)',
-    'Miniflux/2.1.3',
-    'Inoreader/1.0.0 (+http://www.inoreader.com)'
-  ];
-  let RSS_UA = UA_LIST[0];
-
-  const CAT_EMOJI = { news: '📰', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻', crypto: '🪙', business: '💼', science: '🔬', world: '🌐' };
+  const CAT_EMOJI = { news: '', ai: '🤖', stocks: '💰', war: '🌍', tech: '💻', crypto: '🪙', business: '💼', science: '🔬', world: '🌐' };
   const CAT_LABEL = {
     news: '📰 News', ai: '🤖 AI', stocks: '💰 India Stocks',
-    war: '🌍 War News', tech: '💻 Tech News', crypto: '🪙 Crypto',
+    war: ' War News', tech: '💻 Tech News', crypto: '🪙 Crypto',
     business: '💼 Business', science: '🔬 Science', world: '🌐 World News'
   };
 
@@ -158,7 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
     for (const entry of INSTANCE_LIST) {
       try {
         const text = window.Android
-          ? await withTimeout(nativeFetchUA(entry.rss + '/MiddleEastEye/rss', RSS_UA), 8000)
+          ? await withTimeout(nativeFetch(entry.rss + '/MiddleEastEye/rss'), 8000)
           : await (await withTimeout(fetch(entry.rss + '/MiddleEastEye/rss'), 8000)).text();
         if (text && text.includes('<rss')) {
           NITTER_INSTANCE = entry.web;
@@ -170,31 +149,36 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /* ---------- Global click handling ---------- */
-      if (e.target.classList.contains('remove-btn') || e.target.closest('.remove-btn')) {
+  document.body.addEventListener('click', (e) => {
+    // ✅ Search/Hashtag links
+    const searchLink = e.target.closest('.in-app-search');
+    if (searchLink) { e.preventDefault(); e.stopPropagation(); openSearch(searchLink.getAttribute('data-query')); return; }
+    
+    // ✅ User mention links
+    const userLink = e.target.closest('.in-app-user');
+    if (userLink) { e.preventDefault(); e.stopPropagation(); openChannel(userLink.getAttribute('data-user')); return; }
+
+    // ✅ Delete button
+    if (e.target.classList.contains('remove-btn') || e.target.closest('.remove-btn')) {
+      e.preventDefault();
+      e.stopPropagation();
       const btn = e.target.closest('.remove-btn');
       const userToRemove = btn.getAttribute('data-user');
       if (!userToRemove) return;
       
-      // Prevent event from bubbling to other handlers
-      e.stopPropagation();
-      e.preventDefault();
-      
       store.get(['usernames'], (r) => {
         const list = (r.usernames || []).filter(u => u !== userToRemove);
         store.set({ usernames: list }, () => {
-          // Remove all cards for this user
           document.querySelectorAll(`.tweet-card[data-user="${userToRemove}"]`).forEach(el => el.remove());
-          // Also remove any error messages for this user if present
-          const errors = container.querySelectorAll('.error');
-          errors.forEach(err => {
-            if (err.textContent.includes(userToRemove)) err.remove();
-          });
         });
       });
       return;
     }
 
+    // ✅ Translate button
     if (e.target.classList.contains('translate-btn')) {
+      e.preventDefault();
+      e.stopPropagation();
       const btn = e.target;
       const card = btn.closest('.tweet-card');
       const contentEl = card.querySelector('.tweet-content');
@@ -210,8 +194,9 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.textContent = '⏳';
       translateContent(contentEl)
         .then(() => { contentEl.dataset.translated = '1'; btn.textContent = '🔄'; })
-        .catch(() => { btn.textContent = '❗'; setTimeout(() => { btn.textContent = '🌐'; }, 2000); })
+        .catch(() => { btn.textContent = ''; setTimeout(() => { btn.textContent = ''; }, 2000); })
         .finally(() => { btn.disabled = false; });
+      return;
     }
   });
 
@@ -297,14 +282,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-    async function fetchFeed(username, container) {
+  async function fetchFeed(username, container) {
     container.querySelectorAll(`.tweet-card[data-user="${username}"]`).forEach(el => el.remove());
     let added = 0;
     let errorMsg = '';
     
     try {
       const text = await rssFetch(`${RSS_INSTANCE}/${username}/rss`);
-      // Check if we got actual XML or a Cloudflare/HTML error page
       if (!text.includes('<rss') && !text.includes('<?xml')) {
         errorMsg = 'Received invalid response (likely Cloudflare block).';
       } else {
@@ -332,7 +316,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const d = document.createElement('div');
       d.className = 'error';
       d.style.cssText = 'background: #ffebee; color: #c62828; padding: 10px; border-radius: 8px; margin: 10px 0; font-size: 13px;';
-      d.innerHTML = `<strong>Failed to load @${username}.</strong><br>${errorMsg}<br><small>Try again in a minute or check if the instance is rate-limiting.</small>`;
+      d.innerHTML = `<strong>Failed to load @${username}.</strong><br>${errorMsg}`;
       container.prepend(d);
     }
   }
@@ -358,23 +342,10 @@ document.addEventListener('DOMContentLoaded', () => {
         added++;
       });
     } catch (e) { channelContainer.innerHTML = ''; }
-    if (!added && window.Android) {
-      try {
-        const frags = (await nativeFetchPage(`${NITTER_INSTANCE}/${handle}`)).split('\u0001').filter(Boolean);
-        frags.forEach(f => { 
-          const doc = new DOMParser().parseFromString(f, 'text/html');
-          const node = doc.body ? doc.body.firstElementChild : null;
-          if (node) {
-            const card = buildSearchCard(node);
-            if (card) { channelContainer.appendChild(card); added++; }
-          }
-        });
-      } catch (e) {}
-    }
     if (!added) channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '.</div>';
   }
 
-  /* ---------- Search (multi-strategy) ---------- */
+  /* ---------- Search ---------- */
   async function openSearch(query) {
     if (!query) return;
     currentSearchQuery = query;
@@ -586,7 +557,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     collected.forEach(c => trendContainer.appendChild(buildTweetCard(c.item, c)));
-    header.innerHTML = `🔥 ${CAT_LABEL[category]} — latest from ${channels.length} channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
+    header.innerHTML = ` ${CAT_LABEL[category]} — latest from ${channels.length} channels <span class="trend-updated">· updated ${new Date().toLocaleTimeString()}</span>`;
   }
 
   /* ---------- Card builder ---------- */
@@ -609,7 +580,7 @@ document.addEventListener('DOMContentLoaded', () => {
     card.className = 'tweet-card';
     card.setAttribute('data-user', username);
 
-        const descDiv = document.createElement('div');
+    const descDiv = document.createElement('div');
     descDiv.innerHTML = description;
     const img = descDiv.querySelector('img');
     
@@ -738,7 +709,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
-  /* ---------- Translation (Google free + Lingva fallback) ---------- */
+  /* ---------- Translation ---------- */
   async function translateContent(contentEl) {
     const paragraphs = contentEl.querySelectorAll('.tweet-paragraph');
     if (!paragraphs.length) return;
