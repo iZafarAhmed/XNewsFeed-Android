@@ -1,4 +1,4 @@
-// app.js — X News Feed (Android WebView + Browser compatible)
+// app.js — X News Feed (Android WebView + Browser compatible) + your own Twitter API
 
 /* ========== STORAGE ABSTRACTION ========== */
 const store = {
@@ -50,6 +50,10 @@ function nativeFetchPage(url) {
       if (_cbs[id]) { delete _cbs[id]; reject(new Error('timeout')); }
     }, 20000);
   });
+}
+
+function withTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
 }
 
 async function smartFetch(url) {
@@ -146,7 +150,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let saved = '';
     await new Promise(res => store.get(['activeInstance'], r => { saved = r.activeInstance || ''; res(); }));
     const list = saved ? [saved, ...INSTANCES.filter(i => i !== saved)] : INSTANCES;
-
     for (let round = 0; round < 2; round++) {
       for (const inst of list) {
         try {
@@ -181,6 +184,80 @@ document.addEventListener('DOMContentLoaded', () => {
   let channelMode = 'user';
   let currentSearchQuery = '';
 
+  /* ---------- ✅ YOUR OWN TWITTER API (Cloudflare Worker proxy) ---------- */
+  const TWITTER_API = 'https://twitter-api.izafr.workers.dev';
+
+  async function apiGetPosts(handles, max) {
+    const out = {};
+    for (let i = 0; i < handles.length; i += 10) {
+      const chunk = handles.slice(i, i + 10);
+      try {
+        const res = await withTimeout(fetch(`${TWITTER_API}/api/v1/users/posts?users=${chunk.join(',')}&max_posts_per_user=${max}`), 30000);
+        if (!res.ok) continue;
+        const json = await res.json();
+        for (const [h, r] of Object.entries(json.results || {})) {
+          if (!r || !r.success) continue;
+          const arr = Array.isArray(r.posts) ? r.posts : (r.posts && Array.isArray(r.posts.data) ? r.posts.data : []);
+          if (arr.length) out[h] = arr;
+        }
+      } catch (e) {}
+    }
+    return out;
+  }
+
+  function buildApiCard(post, cat = '') {
+    const username = (post.author && post.author.screenName) || post._source_user || 'unknown';
+    const creator = '@' + username;
+    const tweetId = post.id || '';
+    const card = document.createElement('div');
+    card.className = 'tweet-card';
+    card.setAttribute('data-user', username);
+
+    const avatarUrl = (post.author && post.author.profileImageUrl) || '';
+    const avatarHtml = avatarUrl ? `<img class="avatar" src="${escapeAttr(avatarUrl)}" alt="">` : fallbackAvatarHtml(creator);
+    const chip = cat ? `<span class="cat-chip" title="${CAT_LABEL[cat] || ''}">${CAT_EMOJI[cat] || '📰'}</span>` : '';
+    const removeBtn = `<button class="remove-btn" data-user="${username}" title="Remove ${username}">❌</button>`;
+    const translateBtn = `<button class="translate-btn" title="Translate to English">🌐</button>`;
+    const dateHtml = post.createdAtISO ? getRelativeTime(post.createdAtISO) : '';
+
+    let mediaHtml = '';
+    const m0 = (post.media || [])[0];
+    if (m0 && m0.url) {
+      if (m0.type === 'video') {
+        mediaHtml = `<div class="media-container" data-video-mp4="${escapeAttr(m0.url)}" data-tweet-id="${escapeAttr(tweetId)}" data-username="${escapeAttr(username)}" style="aspect-ratio:16/9;background:#000;">
+          <div class="play-btn-overlay">▶ Play Video</div>
+        </div>`;
+      } else {
+        mediaHtml = `<img src="${escapeAttr(m0.url)}" class="tweet-image" alt="Tweet image">`;
+      }
+    }
+
+    const xUrl = tweetId ? `https://x.com/${username}/status/${tweetId}` : '#';
+
+    card.innerHTML = `
+      <div class="tweet-header">
+        <div class="tweet-user">${avatarHtml}<strong>${escapeHtml(creator)}</strong>${chip}</div>
+        <div style="display:flex; align-items:center; gap:6px;">
+          ${translateBtn}
+          ${removeBtn}
+          <span class="tweet-date" title="${escapeAttr(post.createdAtISO || '')}">${escapeHtml(dateHtml)}</span>
+        </div>
+      </div>
+      <div class="tweet-content"><p class="tweet-paragraph">${linkify(escapeHtml(post.text || ''))}</p></div>
+      ${mediaHtml}
+      <a href="${xUrl}" target="_blank" class="tweet-link">View on X (Twitter) ↗</a>`;
+
+    card.querySelector('.tweet-user').addEventListener('click', () => openChannel(username));
+    const av = card.querySelector('img.avatar');
+    if (av) av.addEventListener('error', () => { av.outerHTML = fallbackAvatarHtml(creator); });
+    const mc = card.querySelector('.media-container');
+    if (mc) mc.addEventListener('click', function () {
+      const direct = this.getAttribute('data-video-mp4');
+      if (direct) injectVideoPlayer(this, [direct], '', xUrl);
+    });
+    return card;
+  }
+
   /* ---------- GLOBAL CLICK HANDLER ---------- */
   document.body.addEventListener('click', (e) => {
     const searchLink = e.target.closest('.in-app-search');
@@ -204,7 +281,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const card = btn.closest('.tweet-card');
       const contentEl = card ? card.querySelector('.tweet-content') : null;
       if (!contentEl) return;
-
       if (contentEl.dataset.translated === '1') {
         contentEl.innerHTML = contentEl.dataset.original;
         delete contentEl.dataset.translated;
@@ -212,12 +288,9 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.title = 'Translate to English';
         return;
       }
-
       if (!contentEl.dataset.original) contentEl.dataset.original = contentEl.innerHTML;
-
       btn.disabled = true;
       btn.textContent = '⏳';
-
       translateContent(contentEl)
         .then(() => {
           contentEl.dataset.translated = '1';
@@ -304,14 +377,21 @@ document.addEventListener('DOMContentLoaded', () => {
     popularSelect.value = '';
   });
 
-  /* ---------- FEEDS ---------- */
+  /* ---------- FEEDS (API first, RSS fallback) ---------- */
   function reloadFeeds() {
     feedContainer.innerHTML = '<div class="loader">Loading feeds…</div>';
-    store.get(['usernames'], (r) => {
+    store.get(['usernames'], async (r) => {
       const usernames = r.usernames || ['MiddleEastEye'];
       feedContainer.innerHTML = '';
       if (!usernames.length) { feedContainer.innerHTML = '<p class="empty-state">Add a username to get started!</p>'; return; }
-      usernames.forEach(u => fetchFeed(u, feedContainer));
+      let added = 0;
+      try {
+        const byHandle = await apiGetPosts(usernames, 10);
+        for (const u of usernames) {
+          (byHandle[u] || []).forEach(p => { feedContainer.appendChild(buildApiCard(p)); added++; });
+        }
+      } catch (e) {}
+      if (!added) usernames.forEach(u => fetchFeed(u, feedContainer));
     });
   }
 
@@ -345,7 +425,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  /* ---------- CHANNEL VIEW ---------- */
+  /* ---------- CHANNEL VIEW (API first, then RSS, then syndication) ---------- */
   async function openChannel(username) {
     const handle = (username || '').replace('@', '').trim();
     if (!handle) return;
@@ -355,6 +435,19 @@ document.addEventListener('DOMContentLoaded', () => {
     switchView('channel');
     channelChip.textContent = '@' + handle;
     channelContainer.innerHTML = '<div class="loader">Loading @' + escapeHtml(handle) + '…</div>';
+
+    // 1) Your own Twitter API
+    try {
+      const byHandle = await apiGetPosts([handle], 20);
+      const posts = byHandle[handle] || [];
+      if (posts.length) {
+        channelContainer.innerHTML = '';
+        posts.forEach(p => channelContainer.appendChild(buildApiCard(p)));
+        return;
+      }
+    } catch (e) {}
+
+    // 2) RSS
     try {
       const text = await fetchRss(`${NITTER_INSTANCE}/${handle}/rss`);
       const xml = new DOMParser().parseFromString(text, 'text/xml');
@@ -363,15 +456,18 @@ document.addEventListener('DOMContentLoaded', () => {
       channelContainer.innerHTML = '';
       if (!items.length) { channelContainer.innerHTML = '<p class="empty-state">No posts found.</p>'; return; }
       items.forEach(item => channelContainer.appendChild(buildTweetCard(item, { username: handle, avatarUrl: avatar })));
-    } catch (e) {
-      try {
-        const tweets = await fetchSyndicationTweets(handle);
-        channelContainer.innerHTML = '';
-        tweets.forEach(t => channelContainer.appendChild(buildCardFromTweet(t)));
-        return;
-      } catch (e2) {}
-      channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '.</div>';
-    }
+      return;
+    } catch (e) {}
+
+    // 3) Syndication
+    try {
+      const tweets = await fetchSyndicationTweets(handle);
+      channelContainer.innerHTML = '';
+      tweets.forEach(t => channelContainer.appendChild(buildCardFromTweet(t)));
+      return;
+    } catch (e2) {}
+
+    channelContainer.innerHTML = '<div class="error">Couldn\'t load @' + escapeHtml(handle) + '.</div>';
   }
 
   /* ---------- IN-APP SEARCH ---------- */
@@ -386,7 +482,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const list = [NITTER_INSTANCE, ...INSTANCES.filter(i => i !== NITTER_INSTANCE)];
     const q = encodeURIComponent(query);
-
     let fragments = [];
     let rssItems = [];
     let lastRaw = '';
@@ -425,7 +520,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     channelContainer.innerHTML = '';
-
     if (rssItems.length) {
       rssItems.forEach(item => {
         const creatorNode = item.getElementsByTagName('dc:creator')[0] || item.getElementsByTagName('creator')[0];
@@ -459,39 +553,33 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!username && statusHref) username = statusHref.split('/')[1] || 'unknown';
     if (!username) return null;
     const creator = '@' + username;
-
     const contentEl = node.querySelector('.tweet-content');
     const text = contentEl ? contentEl.textContent.trim() : '';
     if (!text && !tweetId) return null;
-
     const dateEl = node.querySelector('.tweet-date');
     const dateTitle = dateEl?.getAttribute('title') || dateEl?.textContent || '';
-
     let isVideo = !!node.querySelector('video, .gallery-video, .video-container');
     let imgSrc = '';
     const imgs = node.querySelectorAll('.attachments img');
     if (imgs.length) imgSrc = imgs[0].getAttribute('src') || '';
     if (imgSrc && imgSrc.startsWith('/')) imgSrc = NITTER_INSTANCE + imgSrc;
-
     let avatarUrl = node.querySelector('.tweet-avatar')?.getAttribute('src') || '';
     if (avatarUrl && avatarUrl.startsWith('/')) avatarUrl = NITTER_INSTANCE + avatarUrl;
 
     const card = document.createElement('div');
     card.className = 'tweet-card';
     card.setAttribute('data-user', username);
-
     const avatarHtml = avatarUrl ? `<img class="avatar" src="${escapeAttr(avatarUrl)}" alt="">` : fallbackAvatarHtml(creator);
 
     let mediaHtml = '';
     if (imgSrc) {
       mediaHtml = isVideo
         ? `<div class="media-container" data-tweet-id="${tweetId}" data-username="${username}">
-             <img src="${imgSrc}" class="tweet-image" alt="Video thumbnail">
-             <div class="play-btn-overlay">▶ Play Video</div>
-           </div>`
+            <img src="${imgSrc}" class="tweet-image" alt="Video thumbnail">
+            <div class="play-btn-overlay">▶ Play Video</div>
+          </div>`
         : `<img src="${imgSrc}" class="tweet-image" alt="Tweet image">`;
     }
-
     const xUrl = tweetId ? `https://x.com/${username}/status/${tweetId}` : '#';
 
     card.innerHTML = `
@@ -557,16 +645,15 @@ document.addEventListener('DOMContentLoaded', () => {
         videoMp4 = mp4s.length ? mp4s[0].url : '';
         poster = m0.media_url_https || '';
         mediaHtml = `<div class="media-container" data-video-mp4="${escapeAttr(videoMp4)}" data-tweet-id="${tweetId}" data-username="${username}">
-                       <img src="${escapeAttr(poster)}" class="tweet-image" alt="Video thumbnail">
-                       <div class="play-btn-overlay">▶ Play Video</div>
-                     </div>`;
+          <img src="${escapeAttr(poster)}" class="tweet-image" alt="Video thumbnail">
+          <div class="play-btn-overlay">▶ Play Video</div>
+        </div>`;
       }
     }
 
     const card = document.createElement('div');
     card.className = 'tweet-card';
     card.setAttribute('data-user', username);
-
     const avatarHtml = avatarUrl ? `<img class="avatar" src="${escapeAttr(avatarUrl)}" alt="">` : fallbackAvatarHtml(creator);
     const removeBtn = `<button class="remove-btn" data-user="${username}" title="Remove ${username}">❌</button>`;
     const translateBtn = `<button class="translate-btn" title="Translate to English">🌐</button>`;
@@ -622,7 +709,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return channels;
   }
 
-  /* ---------- TRENDING ---------- */
+  /* ---------- TRENDING (API first, RSS+syndication fallback) ---------- */
   async function loadTrends() {
     const category = trendSelect.value || 'world';
     const channels = getCuratedChannels(category);
@@ -635,53 +722,67 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const loader = document.createElement('div');
     loader.className = 'loader';
-    loader.textContent = `Fetching ${CAT_LABEL[category]}… 0/${channels.length}`;
+    loader.textContent = `Fetching ${CAT_LABEL[category]}…`;
     trendContainer.appendChild(loader);
 
     const collected = [];
-    let done = 0;
-    let firstErr = '';
-    let cursor = 0;
 
-    async function runner() {
-      while (cursor < channels.length) {
-        const ch = channels[cursor++];
-        let ok = false;
-        try {
-          const text = await fetchRss(`${NITTER_INSTANCE}/${ch.handle}/rss`);
-          const xml = new DOMParser().parseFromString(text, 'text/xml');
-          if (!xml.querySelector('parsererror')) {
-            const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
-            [...xml.querySelectorAll('item')].slice(0, 3).forEach(item => {
-              const ms = new Date(item.querySelector('pubDate')?.textContent || 0).getTime();
-              collected.push({ ms, el: buildTweetCard(item, { username: ch.handle, avatarUrl: avatar, cat: ch.cat }) });
-            });
-            ok = true;
-          }
-        } catch (e) { firstErr = firstErr || (e && e.message) || 'fetch error'; }
-        if (!ok) {
-          try {
-            const tweets = await fetchSyndicationTweets(ch.handle);
-            tweets.slice(0, 3).forEach(t => {
-              const ms = new Date(t.created_at || 0).getTime();
-              collected.push({ ms, el: buildCardFromTweet(t, ch.cat) });
-            });
-          } catch (e2) {}
-        }
-        done++;
-        loader.textContent = `Fetching ${CAT_LABEL[category]}… ${done}/${channels.length}`;
+    // 1) ✅ Your own Twitter API (fast path, batched 10 users per call)
+    try {
+      const byHandle = await apiGetPosts(channels.map(c => c.handle), 3);
+      for (const ch of channels) {
+        (byHandle[ch.handle] || []).slice(0, 3).forEach(p => {
+          collected.push({ ms: Date.parse(p.createdAtISO || p.createdAt || '') || 0, el: buildApiCard(p, ch.cat) });
+        });
       }
+    } catch (e) {}
+
+    // 2) Fallback: RSS + syndication runners (only if API returned nothing)
+    if (!collected.length) {
+      let done = 0;
+      let firstErr = '';
+      let cursor = 0;
+      loader.textContent = `Fetching ${CAT_LABEL[category]}… 0/${channels.length}`;
+
+      async function runner() {
+        while (cursor < channels.length) {
+          const ch = channels[cursor++];
+          let ok = false;
+          try {
+            const text = await fetchRss(`${NITTER_INSTANCE}/${ch.handle}/rss`);
+            const xml = new DOMParser().parseFromString(text, 'text/xml');
+            if (!xml.querySelector('parsererror')) {
+              const avatar = xml.querySelector('channel > image > url')?.textContent.trim() || '';
+              [...xml.querySelectorAll('item')].slice(0, 3).forEach(item => {
+                const ms = new Date(item.querySelector('pubDate')?.textContent || 0).getTime();
+                collected.push({ ms, el: buildTweetCard(item, { username: ch.handle, avatarUrl: avatar, cat: ch.cat }) });
+              });
+              ok = true;
+            }
+          } catch (e) { firstErr = firstErr || (e && e.message) || 'fetch error'; }
+          if (!ok) {
+            try {
+              const tweets = await fetchSyndicationTweets(ch.handle);
+              tweets.slice(0, 3).forEach(t => {
+                const ms = new Date(t.created_at || 0).getTime();
+                collected.push({ ms, el: buildCardFromTweet(t, ch.cat) });
+              });
+            } catch (e2) {}
+          }
+          done++;
+          loader.textContent = `Fetching ${CAT_LABEL[category]}… ${done}/${channels.length}`;
+        }
+      }
+      await Promise.all([runner(), runner(), runner()]);
     }
-    await Promise.all([runner(), runner(), runner()]);
 
     loader.remove();
-
     collected.sort((a, b) => b.ms - a.ms);
 
     if (!collected.length) {
       const err = document.createElement('div');
       err.className = 'error';
-      err.textContent = 'Couldn\'t fetch any channel in this category. ' + (firstErr ? '(' + firstErr + ')' : 'Nitter might be down.');
+      err.textContent = 'Couldn\'t fetch any channel in this category. Nitter might be down.';
       trendContainer.appendChild(err);
       return;
     }
@@ -723,7 +824,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const avatarHtml = avatarUrl
       ? `<img class="avatar" src="${escapeAttr(avatarUrl)}" alt="">`
       : fallbackAvatarHtml(creator);
-
     const chip = cat ? `<span class="cat-chip" title="${CAT_LABEL[cat] || ''}">${CAT_EMOJI[cat] || '📰'}</span>` : '';
     const removeBtn = `<button class="remove-btn" data-user="${username}" title="Remove ${username}">❌</button>`;
     const translateBtn = `<button class="translate-btn" title="Translate to English">🌐</button>`;
@@ -732,9 +832,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (img) {
       mediaHtml = isVideo
         ? `<div class="media-container" data-tweet-id="${tweetId}" data-username="${username}">
-             <img src="${img.src}" class="tweet-image" alt="Video thumbnail">
-             <div class="play-btn-overlay">▶ Play Video</div>
-           </div>`
+            <img src="${img.src}" class="tweet-image" alt="Video thumbnail">
+            <div class="play-btn-overlay">▶ Play Video</div>
+          </div>`
         : `<img src="${img.src}" class="tweet-image" alt="Tweet image">`;
     }
 
@@ -752,10 +852,8 @@ document.addEventListener('DOMContentLoaded', () => {
       <a href="${xUrl}" target="_blank" class="tweet-link">View on X (Twitter) ↗</a>`;
 
     card.querySelector('.tweet-user').addEventListener('click', () => openChannel(username));
-
     const av = card.querySelector('img.avatar');
     if (av) av.addEventListener('error', () => { av.outerHTML = fallbackAvatarHtml(creator); });
-
     if (isVideo) {
       card.querySelector('.media-container').addEventListener('click', function () { handleVideoPlayback(this); });
     }
@@ -782,7 +880,6 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (tag === 'a') {
           const rawHref = child.getAttribute('href') || '#';
           const inner = richTextHtml(child);
-
           let path = null;
           if (rawHref.startsWith('/')) {
             path = rawHref;
@@ -793,7 +890,6 @@ document.addEventListener('DOMContentLoaded', () => {
               if (u.host === niHost || u.host.endsWith('.' + niHost)) path = u.pathname + u.search;
             } catch (e) {}
           }
-
           if (path && path.includes('/search?q=')) {
             let q = '';
             try { q = decodeURIComponent(path.split('/search?q=')[1].split('&')[0]); } catch (e) {}
@@ -839,7 +935,6 @@ document.addEventListener('DOMContentLoaded', () => {
   async function translateContent(contentEl) {
     const paragraphs = contentEl.querySelectorAll('.tweet-paragraph');
     if (!paragraphs.length) return;
-
     const results = await Promise.all(
       Array.from(paragraphs).map(async p => {
         const originalHtml = p.innerHTML;
@@ -853,14 +948,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       })
     );
-
     contentEl.innerHTML = results.map(h => `<p class="tweet-paragraph">${h}</p>`).join('');
   }
 
   async function translateText(text) {
     const MAX = 500;
     if (text.length <= MAX) return await translateChunk(text);
-
     const chunks = [];
     let remaining = text;
     while (remaining.length > MAX) {
@@ -872,7 +965,6 @@ document.addEventListener('DOMContentLoaded', () => {
       remaining = remaining.slice(cut + 1).trimStart();
     }
     if (remaining) chunks.push(remaining);
-
     const out = [];
     for (const c of chunks) out.push(await translateChunk(c));
     return out.join(' ');
@@ -887,12 +979,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (out.trim()) return out;
       }
     } catch (e) {}
-
     try {
       const data = JSON.parse(await smartFetch('https://lingva.ml/api/v1/auto/en/' + encodeURIComponent(text)));
       if (data && data.translation) return data.translation;
     } catch (e) {}
-
     throw new Error('translation failed');
   }
 
@@ -903,25 +993,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const overlay = container.querySelector('.play-btn-overlay');
     const poster = container.querySelector('img')?.src || '';
     const fallbackUrl = `${NITTER_INSTANCE}/${uname}/status/${tid}`;
-
     if (overlay) { overlay.textContent = 'Loading video...'; overlay.style.fontSize = '12px'; }
-
     try {
       let candidates = [];
-
       try {
         const rawHtml = await smartFetch(fallbackUrl);
         const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
         candidates = await collectVideoCandidates(doc, rawHtml);
       } catch (e) {}
-
       if (!candidates.length) {
         try {
           const fx = JSON.parse(await smartFetch(`https://api.fxtwitter.com/${uname}/status/${tid}`));
           collectMp4s(fx).forEach(u => pushUnique(candidates, u));
         } catch (e) {}
       }
-
       if (!candidates.length) {
         try {
           const vx = JSON.parse(await smartFetch(`https://api.vxtwitter.com/${uname}/status/${tid}`));
@@ -929,14 +1014,11 @@ document.addEventListener('DOMContentLoaded', () => {
           collectMp4s(vx).forEach(u => pushUnique(candidates, u));
         } catch (e) {}
       }
-
       for (const m3u8 of candidates.filter(c => c.includes('.m3u8'))) {
         const mp4 = await extractMp4FromPlaylist(m3u8);
         if (mp4) pushUnique(candidates, mp4);
       }
-
       candidates.sort((a, b) => (a.includes('.mp4') ? -1 : 1) - (b.includes('.mp4') ? -1 : 1));
-
       if (candidates.length) injectVideoPlayer(container, candidates, poster, fallbackUrl);
       else showFallback(container, fallbackUrl, '🎬 Video not found. Click to open on Nitter.');
     } catch (err) {
@@ -968,14 +1050,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (raw.startsWith('http') && (raw.includes('.mp4') || raw.includes('.m3u8') || raw.includes('video.twimg'))) pushUnique(candidates, raw);
       if (raw.startsWith('/') && (raw.includes('.mp4') || raw.includes('.m3u8') || raw.includes('/video/') || raw.includes('/vid/'))) pushUnique(candidates, NITTER_INSTANCE + raw);
     };
-
     doc.querySelectorAll('video source[src], video[src], video[data-url], a.video-download[href], a[href*="ext_tw_video"]').forEach(el => {
       pushRaw(el.getAttribute('src') || el.getAttribute('data-url') || el.getAttribute('href'));
     });
-
     const urlRegex = /https?:\/\/[^"'\s<>]+?(?:video\.twimg\.com|ext_tw_video)[^"'\s<>]*/g;
     (rawHtml.match(urlRegex) || []).forEach(m => pushRaw(m.replace(/[.,;:]+$/, '')));
-
     return candidates;
   }
 
@@ -1018,14 +1097,12 @@ document.addEventListener('DOMContentLoaded', () => {
     video.controls = true; video.playsInline = true;
     if (poster) video.poster = poster;
     video.style.cssText = 'max-width:100%; border-radius:12px; display:block; background:black;';
-
     let i = 0;
     video.addEventListener('error', () => {
       i++;
       if (i < candidates.length) { video.src = candidates[i]; video.load(); video.play().catch(() => {}); }
       else showFallback(container, fallbackUrl, '🎬 Playback failed. Click to open on Nitter.');
     });
-
     video.src = candidates[0];
     container.appendChild(video);
     video.play().catch(() => {});
