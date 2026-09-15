@@ -580,13 +580,23 @@ document.addEventListener('DOMContentLoaded', () => {
     card.className = 'tweet-card';
     card.setAttribute('data-user', username);
 
-    const descDiv = document.createElement('div');
+        const descDiv = document.createElement('div');
     descDiv.innerHTML = description;
     const img = descDiv.querySelector('img');
     
-    // ✅ Fix: Convert relative Nitter image URLs to absolute
-    if (img && img.src && img.src.startsWith('/')) {
-      img.src = NITTER_INSTANCE + img.src;
+    // ✅ Fix: Handle Nitter image proxy URLs properly
+    if (img && img.src) {
+      if (img.src.startsWith('/')) {
+        // Relative URL - make it absolute
+        img.src = NITTER_INSTANCE + img.src;
+      } else if (img.src.includes('nitter.kareem.one') || img.src.includes('nitter.')) {
+        // Already absolute Nitter URL - ensure HTTPS
+        img.src = img.src.replace('http://', 'https://');
+      }
+      // Add error handling
+      img.onerror = function() {
+        this.style.display = 'none';
+      };
     }
     
     const isVideo = description.includes('Video') || (img && img.src.includes('ext_tw_video_thumb'));
